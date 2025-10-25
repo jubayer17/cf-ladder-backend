@@ -1,22 +1,25 @@
-## 🚀 Codeforces Ladder
+# ⚡ CF Ladder
 
-A personalized **Codeforces Ladder** web app built with **Next.js**, **TypeScript**, and **Tailwind CSS**, designed to help competitive programmers track, filter, and solve problems efficiently.
+A full-stack Codeforces practice tracker (Next.js 16 frontend + Express backend) for building problem ladders, filtering problems, and tracking solved problems.
 
-### 🔧 Features
-- 🧠 **Dynamic Problem Filtering** – Filter problems by rating, tags, and acceptance.
-- 🧮 **User Stats Integration** – Displays solved problems by fetching user submissions.
-- 🧭 **Pagination & Sorting** – Smart pagination with custom page jumps and sorting.
-- ⚡ **Optimized Performance** – Efficient state management and memoization.
-- 🎨 **Modern UI** – Clean and responsive interface with Tailwind and shadcn components.
+## Tech Stack 🧰
 
-### 🛠️ Tech Stack
-- **Frontend:** Next.js 14, TypeScript, Tailwind CSS, shadcn/ui  
-- **Backend:** Node.js (for problem fetching & API endpoints)  
-- **Deployment:** Vercel  
+- **Frontend:** Next.js 16, React, TypeScript, Tailwind CSS 🖥️  
+- **Backend:** Node.js, Express.js, Axios ⚙️  
+- **Database (optional):** MongoDB / Firebase Firestore 🗄️
 
-### 📦 Installation
-```bash
-git clone https://github.com/<your-username>/cf-ladder.git
-cd cf-ladder
-npm install
-npm run dev
+## Quick Start 🚀
+
+    # clone
+    git clone https://github.com/jubayer17/cf-ladder.git
+    cd cf-ladder
+
+    # frontend
+    cd frontend
+    npm install
+    npm run dev       # http://localhost:3000
+
+    # backend (new terminal)
+    cd ../backend
+    npm install
+    npm start         # http://localhost:4000
