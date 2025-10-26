@@ -14,7 +14,7 @@ app.get('/', (req, res) => {
     res.send('✅ Server is running successfully!');
 });
 
-// 👇 API routes
+// 👇 API routes (path only, no domain!)
 app.use('/api/problems', problemRoutes);
 
 const PORT = process.env.PORT || 4000;
