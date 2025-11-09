@@ -39,10 +39,11 @@ Thumbs.db
 coverage/
 .nyc_output/
 
-# Database files (if using SQLite locally)
+# Database files
 *.db
 *.sqlite
 *.sqlite3
+cf-contests.sqlite
 
 # Misc
 *.pid

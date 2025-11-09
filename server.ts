@@ -1,10 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import connectDB from './config/database.js';
 import problemRoutes from './routes/problems.js';
 import contestRoutes from './routes/contests.js';
 
 dotenv.config();
+
+// Connect to MongoDB
+connectDB();
 
 const app = express();
 app.use(cors()); // ✅ Allow cross-origin requests
