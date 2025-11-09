@@ -1,11 +1,30 @@
+export type UserStatus = "solved" | "failed" | "unsolved";
+
 export interface Problem {
-    contestId: number;
+    contestId?: number;
     index: string;
     name: string;
-    tags: string[];
+    type?: string;
     rating?: number;
+    tags: string[];
     solvedCount?: number;
-    attemptCount?: number;
 }
 
-export type UserStatus = 'unsolved' | 'solved' | 'failed';
+export type ContestInfo = {
+    id: number;
+    name: string;
+    phase: string;
+    category: string;
+    type?: string;
+    durationSeconds?: number;
+    startTimeSeconds?: number;
+};
+
+export type ProblemInfo = {
+    contestId?: number;
+    index?: string;
+    name?: string;
+    category?: string;
+    points?: number;
+    rating?: number;
+};
