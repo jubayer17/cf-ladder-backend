@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import problemRoutes from './routes/problems.js';
+import contestRoutes from './routes/contests.js';
 
 dotenv.config();
 
@@ -16,6 +17,7 @@ app.get('/', (req, res) => {
 
 // 👇 API routes (path only, no domain!)
 app.use('/api/problems', problemRoutes);
+app.use('/api/contests', contestRoutes);
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`🚀 Backend running on port ${PORT}`));
