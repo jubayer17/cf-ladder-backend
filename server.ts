@@ -24,4 +24,11 @@ app.use('/api/problems', problemRoutes);
 app.use('/api/contests', contestRoutes);
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`🚀 Backend running on port ${PORT}`));
+
+// For local development
+if (process.env.NODE_ENV !== 'production') {
+    app.listen(PORT, () => console.log(`🚀 Backend running on port ${PORT}`));
+}
+
+// Export for Vercel
+export default app;
