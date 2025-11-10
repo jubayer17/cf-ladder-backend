@@ -49,32 +49,63 @@ interface ProblemsetResponse {
 // Sync contests from Codeforces API to MongoDB
 router.post('/sync', async (req, res) => {
     try {
-        console.log('🔄 Starting contest sync from Codeforces...');
-        
-        // Fetch contests from Codeforces
+        console.log('🔄 Starting incremental contest sync from Codeforces...');
+
+        // Step 1: Get the latest contest ID from MongoDB
+        const latestContest = await Contest.findOne()
+            .sort({ id: -1 })
+            .limit(1)
+            .lean();
+
+        const maxContestId = latestContest?.id || 0;
+        console.log(`📊 Latest contest ID in database: ${maxContestId}`);
+
+        // Step 2: Fetch all contests from Codeforces (required to know what's new)
         const contestsResponse = await axios.get<{ status: string; result: CFContest[] }>(
             'https://codeforces.com/api/contest.list'
         );
-        
+
         if (contestsResponse.data.status !== 'OK') {
             return res.status(500).json({ error: 'Failed to fetch contests from Codeforces' });
         }
 
-        const contests: CFContest[] = contestsResponse.data.result;
-        
-        // Fetch all problems from Codeforces
+        const allContests: CFContest[] = contestsResponse.data.result;
+
+        // Step 3: Filter to only NEW FINISHED contests (ID > maxContestId AND phase === 'FINISHED')
+        const newContests = allContests.filter(contest =>
+            contest.id > maxContestId &&
+            contest.phase === 'FINISHED'
+        );
+
+        console.log(`🆕 Found ${newContests.length} new FINISHED contests (out of ${allContests.length} total)`);
+
+        // Early exit if no new contests
+        if (newContests.length === 0) {
+            console.log('✅ Already up to date - no new contests');
+            return res.json({
+                success: true,
+                contestsInserted: 0,
+                contestsUpdated: 0,
+                totalProblems: 0,
+                message: 'Already up to date'
+            });
+        }
+
+        // Step 4: Fetch all problems (we still need this to map problems to contests)
         const problemsResponse = await axios.get<ProblemsetResponse>(
             'https://codeforces.com/api/problemset.problems'
         );
-        
-        const allProblems: CFProblem[] = problemsResponse.data.status === 'OK' 
-            ? problemsResponse.data.result.problems 
+
+        const allProblems: CFProblem[] = problemsResponse.data.status === 'OK'
+            ? problemsResponse.data.result.problems
             : [];
 
-        // Group problems by contest ID
+        // Step 5: Group problems by contest ID - only for NEW contests
+        const newContestIds = new Set(newContests.map(c => c.id));
         const problemsByContest = new Map<number, CFProblem[]>();
+
         allProblems.forEach(problem => {
-            if (problem.contestId) {
+            if (problem.contestId && newContestIds.has(problem.contestId)) {
                 if (!problemsByContest.has(problem.contestId)) {
                     problemsByContest.set(problem.contestId, []);
                 }
@@ -85,10 +116,12 @@ router.post('/sync', async (req, res) => {
         let contestsInserted = 0;
         let contestsUpdated = 0;
 
-        // Insert or update contests with their problems
-        for (const contest of contests) {
+        // Step 6: Insert or update only NEW contests with their problems
+        const contestsToInsert = [];
+
+        for (const contest of newContests) {
             const contestProblems = problemsByContest.get(contest.id) || [];
-            
+
             const contestData = {
                 id: contest.id,
                 name: contest.name,
@@ -119,38 +152,45 @@ router.post('/sync', async (req, res) => {
                 lastSynced: new Date()
             };
 
+            // Check if contest exists (shouldn't happen, but safety check)
             const existing = await Contest.findOne({ id: contest.id });
             if (existing) {
                 await Contest.updateOne({ id: contest.id }, contestData);
                 contestsUpdated++;
             } else {
-                await Contest.create(contestData);
-                contestsInserted++;
+                contestsToInsert.push(contestData);
             }
         }
 
-        // Save to cache file
+        // Batch insert new contests for better performance
+        if (contestsToInsert.length > 0) {
+            await Contest.insertMany(contestsToInsert);
+            contestsInserted = contestsToInsert.length;
+        }
+
+        // Save to cache file (only new contests)
         await fs.mkdir(path.dirname(CACHE_FILE), { recursive: true });
         await fs.writeFile(CACHE_FILE, JSON.stringify({
-            contests,
-            problems: allProblems,
+            contests: newContests,
+            problems: Array.from(problemsByContest.values()).flat(),
             lastSync: Math.floor(Date.now() / 1000),
             timestamp: Date.now()
         }));
 
-        console.log(`✅ Synced ${contestsInserted} new contests and updated ${contestsUpdated} contests`);
+        console.log(`✅ Synced ${contestsInserted} new contests and updated ${contestsUpdated} contests (${newContests.length} total processed)`);
 
         res.json({
             success: true,
             contestsInserted,
             contestsUpdated,
-            totalProblems: allProblems.length
+            totalProblems: Array.from(problemsByContest.values()).flat().length,
+            newContestsCount: newContests.length
         });
     } catch (error: any) {
         console.error('❌ Error syncing contests:', error.message);
-        res.status(500).json({ 
-            error: 'Failed to sync contests', 
-            details: error.message 
+        res.status(500).json({
+            error: 'Failed to sync contests',
+            details: error.message
         });
     }
 });
@@ -159,7 +199,7 @@ router.post('/sync', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const { phase, limit = '100', offset = '0', search } = req.query;
-        
+
         const query: any = {};
         if (phase) {
             query.phase = phase;
@@ -188,13 +228,121 @@ router.get('/', async (req, res) => {
     }
 });
 
+// Get contests organized by categories
+router.get('/by-category', async (req, res) => {
+    try {
+        const { limit = '50' } = req.query;
+        const limitNum = parseInt(limit as string);
+
+        // Fetch all contests sorted by latest
+        const allContests = await Contest.find()
+            .sort({ startTimeSeconds: -1 })
+            .select('id name type phase startTimeSeconds problems')
+            .lean();
+
+        // Helper function to categorize contests
+        const categorizeContest = (name: string) => {
+            const lowerName = name.toLowerCase();
+
+            // Check for Div. 1 + Div. 2
+            if (lowerName.includes('div. 1') && lowerName.includes('div. 2')) {
+                return 'DIV1_DIV2';
+            }
+            // Check for Div. 1
+            if (lowerName.includes('div. 1') || lowerName.includes('div.1')) {
+                return 'DIV1';
+            }
+            // Check for Div. 2
+            if (lowerName.includes('div. 2') || lowerName.includes('div.2')) {
+                return 'DIV2';
+            }
+            // Check for Div. 3
+            if (lowerName.includes('div. 3') || lowerName.includes('div.3')) {
+                return 'DIV3';
+            }
+            // Check for Div. 4
+            if (lowerName.includes('div. 4') || lowerName.includes('div.4')) {
+                return 'DIV4';
+            }
+            // Check for Global
+            if (lowerName.includes('global')) {
+                return 'GLOBAL';
+            }
+            // Check for Educational
+            if (lowerName.includes('educational')) {
+                return 'EDUCATIONAL';
+            }
+
+            return 'OTHERS';
+        };
+
+        // Organize contests by category
+        const categories: Record<string, any[]> = {
+            DIV1_DIV2: [],
+            DIV1: [],
+            DIV2: [],
+            DIV3: [],
+            DIV4: [],
+            GLOBAL: [],
+            EDUCATIONAL: [],
+            OTHERS: []
+        };
+
+        allContests.forEach(contest => {
+            const category = categorizeContest(contest.name);
+            if (categories[category]) {
+                categories[category]!.push({
+                    id: contest.id,
+                    name: contest.name,
+                    type: contest.type,
+                    phase: contest.phase,
+                    startTimeSeconds: contest.startTimeSeconds,
+                    problemCount: contest.problems?.length || 0,
+                    date: contest.startTimeSeconds
+                        ? new Date(contest.startTimeSeconds * 1000).toISOString()
+                        : null
+                });
+            }
+        });
+
+        // Limit each category
+        Object.keys(categories).forEach(key => {
+            if (categories[key]) {
+                categories[key] = categories[key]!.slice(0, limitNum);
+            }
+        });
+
+        // Get counts
+        const counts = {
+            DIV1_DIV2: categories.DIV1_DIV2?.length || 0,
+            DIV1: categories.DIV1?.length || 0,
+            DIV2: categories.DIV2?.length || 0,
+            DIV3: categories.DIV3?.length || 0,
+            DIV4: categories.DIV4?.length || 0,
+            GLOBAL: categories.GLOBAL?.length || 0,
+            EDUCATIONAL: categories.EDUCATIONAL?.length || 0,
+            OTHERS: categories.OTHERS?.length || 0,
+            total: allContests.length
+        };
+
+        res.json({
+            success: true,
+            counts,
+            categories
+        });
+    } catch (error: any) {
+        console.error('❌ Error fetching contests by category:', error.message);
+        res.status(500).json({ error: 'Failed to fetch contests by category' });
+    }
+});
+
 // Get single contest by ID
 router.get('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        
+
         const contest = await Contest.findOne({ id: parseInt(id) }).lean();
-        
+
         if (!contest) {
             return res.status(404).json({ error: 'Contest not found' });
         }
@@ -244,11 +392,11 @@ router.get('/sync/status', async (req, res) => {
             .sort({ lastSynced: -1 })
             .select('lastSynced')
             .lean();
-        
+
         const contestCount = await Contest.countDocuments();
-        
+
         const lastSync = latestContest?.lastSynced;
-        const needsSync = !lastSync || 
+        const needsSync = !lastSync ||
             (Date.now() - new Date(lastSync).getTime() > CACHE_DURATION);
 
         res.json({
@@ -267,14 +415,14 @@ router.get('/sync/status', async (req, res) => {
 router.get('/problems/all', async (req, res) => {
     try {
         const { minRating, maxRating, tags, limit = '100' } = req.query;
-        
+
         const pipeline: any[] = [
             { $unwind: '$problems' }
         ];
 
         // Build match conditions
         const matchConditions: any = {};
-        
+
         if (minRating || maxRating) {
             matchConditions['problems.rating'] = {};
             if (minRating) matchConditions['problems.rating'].$gte = parseInt(minRating as string);
