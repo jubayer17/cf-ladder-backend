@@ -233,12 +233,23 @@ router.get('/by-category', async (req, res) => {
     try {
         const { limit = '50' } = req.query;
         const limitNum = parseInt(limit as string);
+        
+        // Use aggregation pipeline for better performance
+        const pipeline = [
+            { $sort: { startTimeSeconds: -1 } },
+            {
+                $project: {
+                    id: 1,
+                    name: 1,
+                    type: 1,
+                    phase: 1,
+                    startTimeSeconds: 1,
+                    problemCount: { $size: { $ifNull: ['$problems', []] } }
+                }
+            }
+        ];
 
-        // Fetch all contests sorted by latest
-        const allContests = await Contest.find()
-            .sort({ startTimeSeconds: -1 })
-            .select('id name type phase startTimeSeconds problems')
-            .lean();
+        const allContests = await Contest.aggregate(pipeline).exec();
 
         // Helper function to categorize contests
         const categorizeContest = (name: string) => {
