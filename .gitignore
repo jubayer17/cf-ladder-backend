@@ -34,10 +34,25 @@ Thumbs.db
 # Cache
 .cache/
 *.cache.json
+cache/
 
 # Testing
 coverage/
 .nyc_output/
+test-*.mjs
+test-*.ts
+*-test.mjs
+*-test.ts
+quick-test.*
+
+# Utility scripts
+call-sync.ts
+sync-contests.ts
+fetch-contest-names.ts
+populate-from-cache.ts
+verify-data.ts
+cleanup-*.mjs
+utils/
 
 # Database files
 *.db
