@@ -11,12 +11,24 @@ dotenv.config();
 connectDB();
 
 const app = express();
-app.use(cors());
+
+// Enable CORS for all origins
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+}));
+
 app.use(express.json());
 
 // Root route
 app.get('/', (req, res) => {
-    res.send('✅ Server is running successfully!');
+    res.json({ status: 'ok', message: '✅ Server is running successfully!' });
+});
+
+app.get('/api', (req, res) => {
+    res.json({ status: 'ok', message: '✅ API is running!' });
 });
 
 // API routes
