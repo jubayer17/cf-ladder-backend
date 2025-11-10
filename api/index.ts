@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
@@ -22,8 +22,60 @@ app.use(cors({
 
 app.use(express.json());
 
-// Connect to MongoDB (async, won't block)
-connectDB().catch(err => console.error('MongoDB connection failed:', err));
+// Initialize MongoDB connection (don't wait for it to block startup)
+let dbConnectionPromise: Promise<void> | null = null;
+
+const initDB = async () => {
+    if (!dbConnectionPromise) {
+        dbConnectionPromise = connectDB();
+    }
+    return dbConnectionPromise;
+};
+
+// Start connection immediately
+initDB().catch(err => {
+    console.error('❌ Initial MongoDB connection failed:', err.message);
+});
+
+// Middleware to ensure DB is connected before processing requests
+const ensureDBConnection = async (req: Request, res: Response, next: NextFunction) => {
+    // Skip DB check for health endpoint
+    if (req.path === '/api/health' || req.path === '/' || req.path === '/api') {
+        return next();
+    }
+
+    try {
+        // Try to connect if not already connected
+        if (mongoose.connection.readyState !== 1) {
+            console.log('⏳ Waiting for MongoDB connection...');
+            await initDB();
+            
+            // Wait a bit more if still connecting
+            let retries = 0;
+            while (mongoose.connection.readyState !== 1 && retries < 5) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+                retries++;
+            }
+        }
+
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({
+                success: false,
+                error: 'Database connection not available. Please try again in a moment.',
+                dbState: mongoose.connection.readyState
+            });
+        }
+
+        next();
+    } catch (error: any) {
+        console.error('❌ DB connection middleware error:', error.message);
+        res.status(503).json({
+            success: false,
+            error: 'Database connection failed',
+            message: error.message
+        });
+    }
+};
 
 // Health check endpoint with detailed diagnostics
 app.get('/api/health', (req, res) => {
@@ -55,13 +107,13 @@ app.get('/api', (req, res) => {
     res.json({ status: 'ok', message: '✅ API is running!' });
 });
 
-// API routes
-app.use('/api/problems', problemRoutes);
-app.use('/api/contests', contestRoutes);
+// Apply DB connection middleware to API routes
+app.use('/api/problems', ensureDBConnection, problemRoutes);
+app.use('/api/contests', ensureDBConnection, contestRoutes);
 
 // Error handler
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error('Error:', err);
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    console.error('❌ Error:', err);
     res.status(500).json({
         success: false,
         error: err.message || 'Internal server error',
