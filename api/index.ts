@@ -45,20 +45,23 @@ const ensureDBConnection = async (req: Request, res: Response, next: NextFunctio
     }
 
     try {
+        const CONNECTED = 1; // mongoose.connection.readyState === 1 means connected
+        
         // Try to connect if not already connected
-        if (mongoose.connection.readyState !== 1) {
+        if ((mongoose.connection.readyState as number) !== CONNECTED) {
             console.log('⏳ Waiting for MongoDB connection...');
             await initDB();
             
             // Wait a bit more if still connecting
             let retries = 0;
-            while (mongoose.connection.readyState !== 1 && retries < 5) {
+            const maxRetries = 5;
+            while ((mongoose.connection.readyState as number) !== CONNECTED && retries < maxRetries) {
                 await new Promise(resolve => setTimeout(resolve, 500));
                 retries++;
             }
         }
-
-        if (mongoose.connection.readyState !== 1) {
+        
+        if ((mongoose.connection.readyState as number) !== CONNECTED) {
             return res.status(503).json({
                 success: false,
                 error: 'Database connection not available. Please try again in a moment.',

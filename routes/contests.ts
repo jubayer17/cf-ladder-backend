@@ -248,7 +248,7 @@ router.get('/by-category', async (req, res) => {
         console.log('📊 Fetching contests by category, limit:', limitNum);
         
         // Use aggregation pipeline for better performance
-        const pipeline = [
+        const pipeline: any[] = [
             { $sort: { startTimeSeconds: -1 } },
             {
                 $project: {

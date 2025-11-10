@@ -7,8 +7,13 @@ import contestRoutes from './routes/contests.js';
 
 dotenv.config();
 
-// Connect to MongoDB
-connectDB();
+// Connect to MongoDB with error handling
+connectDB().catch(err => {
+    console.error('❌ Fatal: MongoDB connection failed:', err.message);
+    if (process.env.NODE_ENV !== 'production') {
+        process.exit(1);
+    }
+});
 
 const app = express();
 
