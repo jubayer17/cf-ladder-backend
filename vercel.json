@@ -5,7 +5,12 @@
       "src": "api/index.ts",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": ["config/**", "routes/**", "models/**", "controllers/**"]
+        "includeFiles": [
+          "config/**",
+          "routes/**",
+          "models/**",
+          "controllers/**"
+        ]
       }
     }
   ],

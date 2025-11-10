@@ -19,5 +19,12 @@
     "skipLibCheck": true
   },
   "include": ["./**/*.ts"],
-  "exclude": ["node_modules", "dist", "utils/db.ts", "**/*.test.ts", "test-*.ts", "*-test.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "utils/db.ts",
+    "**/*.test.ts",
+    "test-*.ts",
+    "*-test.ts"
+  ]
 }
