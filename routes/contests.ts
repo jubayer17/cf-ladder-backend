@@ -1,5 +1,6 @@
 import express from 'express';
 import axios from 'axios';
+import mongoose from 'mongoose';
 import Contest from '../models/Contest.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -231,8 +232,20 @@ router.get('/', async (req, res) => {
 // Get contests organized by categories
 router.get('/by-category', async (req, res) => {
     try {
+        // Check MongoDB connection
+        if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+            console.error('❌ MongoDB not connected, state:', mongoose.connection?.readyState);
+            return res.status(503).json({ 
+                success: false,
+                error: 'Database connection not available. Please try again in a moment.',
+                dbState: mongoose.connection?.readyState 
+            });
+        }
+
         const { limit = '50' } = req.query;
         const limitNum = parseInt(limit as string);
+        
+        console.log('📊 Fetching contests by category, limit:', limitNum);
         
         // Use aggregation pipeline for better performance
         const pipeline = [
@@ -250,6 +263,8 @@ router.get('/by-category', async (req, res) => {
         ];
 
         const allContests = await Contest.aggregate(pipeline).exec();
+        
+        console.log(`✅ Found ${allContests.length} total contests`);
 
         // Helper function to categorize contests
         const categorizeContest = (name: string) => {
