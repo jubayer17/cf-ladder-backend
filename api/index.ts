@@ -7,9 +7,6 @@ import contestRoutes from '../routes/contests.js';
 
 dotenv.config();
 
-// Connect to MongoDB
-connectDB();
-
 const app = express();
 
 // Enable CORS for all origins
@@ -21,6 +18,9 @@ app.use(cors({
 }));
 
 app.use(express.json());
+
+// Connect to MongoDB (async, won't block)
+connectDB().catch(err => console.error('MongoDB connection failed:', err));
 
 // Root route
 app.get('/', (req, res) => {
