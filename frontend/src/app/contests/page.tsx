@@ -9,9 +9,13 @@ import type { ProblemInfo } from "@/components/contests/ProblemBox";
 import type { ContestInfo as CI } from "@/components/contests/ContestNameCell";
 
 /* CONFIG */
-const CF_CONTEST_LIST = "https://codeforces.com/api/contest.list";
-const CF_CONTEST_STANDINGS = (id: number, showUnofficial = false) =>
-    `https://codeforces.com/api/contest.standings?contestId=${id}&from=1&count=1${showUnofficial ? "" : "&showUnofficial=false"}`;
+// Use environment variable or fallback to localhost for development
+const BACKEND_API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:4000";
+const BACKEND_CONTESTS_BY_CATEGORY = `${BACKEND_API}/api/contests/by-category`;
+const BACKEND_CONTEST_BY_ID = (id: number) => `${BACKEND_API}/api/contests/${id}`;
+const BACKEND_SYNC_CONTESTS = `${BACKEND_API}/api/contests/sync`;
+
+console.log('🔗 Backend API URL:', BACKEND_API);
 
 const CONTESTS_KEY = "cf_finished_contests_vX"; // global durable list
 const CONTESTS_KEY_TS = "cf_finished_contests_vX_ts";
@@ -198,7 +202,15 @@ async function fetchWithCacheJson(url: string) {
 
 /* Force fresh fetch, bypassing cache - for update operations */
 async function fetchFreshJson(url: string) {
-    const res = await fetch(url, { cache: 'no-cache' });
+    // Use multiple cache-busting techniques
+    const res = await fetch(url, {
+        cache: 'no-cache',
+        headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        }
+    });
     if (!res.ok) throw new Error(`Fetch ${res.status}`);
     const data = await res.json();
 
@@ -207,7 +219,9 @@ async function fetchFreshJson(url: string) {
         try {
             const cacheName = "cf-api-cache-sectioned";
             const cache = await caches.open(cacheName);
-            cache.put(url, new Response(JSON.stringify(data)));
+            // Remove timestamp parameter before caching
+            const cacheUrl = url.split('?')[0] + (url.includes('?') ? '?' + url.split('?')[1].replace(/&?_t=\d+/, '') : '');
+            cache.put(cacheUrl, new Response(JSON.stringify(data)));
         } catch { }
     }
 
@@ -329,13 +343,21 @@ export default function Page(): React.ReactElement {
                     }
                 } catch { }
                 try {
-                    const data = await fetchWithCacheJson(CF_CONTEST_STANDINGS(cid));
-                    const raw = data?.result?.problems;
-                    const problems: ProblemInfo[] = Array.isArray(raw) ? raw.map((p: any) => ({ contestId: Number(p.contestId), index: String(p.index), name: String(p.name ?? ""), points: p.points, rating: p.rating })) : [];
-                    if (problems.length) {
-                        try { await saveProblemsDB(cid, problems); } catch { }
-                        try { localStorage.setItem(`${PROBLEM_KEY_PREFIX}${cid}`, JSON.stringify(problems)); } catch { }
-                        setContestProblemsMap(mp => ({ ...mp, [cid]: problems }));
+                    // Fetch from backend MongoDB database instead of Codeforces API
+                    const data = await fetchWithCacheJson(BACKEND_CONTEST_BY_ID(cid));
+                    if (data?.success && data?.contest?.problems) {
+                        const problems: ProblemInfo[] = data.contest.problems.map((p: any) => ({
+                            contestId: Number(p.contestId),
+                            index: String(p.index),
+                            name: String(p.name ?? ""),
+                            points: p.points,
+                            rating: p.rating
+                        })).sort((a: ProblemInfo, b: ProblemInfo) => (a.index || "").localeCompare(b.index || ""));
+                        if (problems.length) {
+                            try { await saveProblemsDB(cid, problems); } catch { }
+                            try { localStorage.setItem(`${PROBLEM_KEY_PREFIX}${cid}`, JSON.stringify(problems)); } catch { }
+                            setContestProblemsMap(mp => ({ ...mp, [cid]: problems }));
+                        }
                     }
                 } catch { }
                 return null;
@@ -357,7 +379,7 @@ export default function Page(): React.ReactElement {
         setTimeout(run, 250);
     }, []);
 
-    /* fetchProblemsForContest: IDB -> localStorage -> network (retries) */
+    /* fetchProblemsForContest: IDB -> localStorage -> backend MongoDB (not Codeforces API) */
     const fetchProblemsForContest = useCallback(async (contestId: number, forceNetwork = false): Promise<ProblemInfo[]> => {
         const key = `${PROBLEM_KEY_PREFIX}${contestId}`;
         if (!forceNetwork) {
@@ -365,21 +387,32 @@ export default function Page(): React.ReactElement {
             try { const raw = localStorage.getItem(key); const parsed = safeParse(raw); if (Array.isArray(parsed) && parsed.length) return parsed as ProblemInfo[]; } catch { }
         }
 
-        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-            const showUnofficial = attempt > 1;
-            try {
-                const data = await fetchWithCacheJson(CF_CONTEST_STANDINGS(contestId, showUnofficial));
-                const raw = data?.result?.problems;
-                const problems: ProblemInfo[] = Array.isArray(raw) ? raw.map((p: any) => ({ contestId: Number(p.contestId), index: String(p.index), name: String(p.name ?? ""), points: p.points, rating: p.rating })) : [];
+        // Fetch from backend MongoDB database instead of Codeforces API
+        try {
+            // Use fetchFreshJson if forceNetwork is true to bypass all caches
+            const fetchFn = forceNetwork ? fetchFreshJson : fetchWithCacheJson;
+            const url = forceNetwork
+                ? `${BACKEND_CONTEST_BY_ID(contestId)}?_t=${Date.now()}`
+                : BACKEND_CONTEST_BY_ID(contestId);
+
+            const data = await fetchFn(url);
+            if (data?.success && data?.contest?.problems) {
+                const problems: ProblemInfo[] = data.contest.problems.map((p: any) => ({
+                    contestId: Number(p.contestId),
+                    index: String(p.index),
+                    name: String(p.name ?? ""),
+                    points: p.points,
+                    rating: p.rating
+                })).sort((a: ProblemInfo, b: ProblemInfo) => (a.index || "").localeCompare(b.index || ""));
+
                 if (problems.length) {
                     try { await saveProblemsDB(contestId, problems); } catch { }
                     try { localStorage.setItem(key, JSON.stringify(problems)); } catch { }
                     return problems;
                 }
-                await SLEEP(BASE_BACKOFF_MS * attempt);
-            } catch {
-                await SLEEP(BASE_BACKOFF_MS * attempt);
             }
+        } catch (e) {
+            console.error(`Failed to fetch problems for contest ${contestId} from backend`, e);
         }
 
         try { const dbVal = await loadProblemsDB(contestId); if (Array.isArray(dbVal)) return dbVal; } catch { }
@@ -501,22 +534,45 @@ export default function Page(): React.ReactElement {
         setErrorContests(null);
         setLoadingContests(true);
         try {
-            const data = await fetchWithCacheJson(CF_CONTEST_LIST);
-            if (data?.status !== "OK") throw new Error("CF API not OK");
-            const allRaw = normalizeAndFilter(data.result || []);
+            const data = await fetchWithCacheJson(`${BACKEND_CONTESTS_BY_CATEGORY}?limit=10000`);
+            if (!data?.success) throw new Error("Backend API failed");
+
+            // Map backend category names to frontend section names
+            const categoryMap: Record<string, string> = {
+                'DIV1_DIV2': 'Div 1+2',
+                'DIV1': 'Div. 1',
+                'DIV2': 'Div. 2',
+                'DIV3': 'Div. 3',
+                'DIV4': 'Div. 4',
+                'GLOBAL': 'Global',
+                'EDUCATIONAL': 'Educational',
+                'OTHERS': 'Others'
+            };
+
+            const backendCategory = Object.entries(categoryMap).find(([k, v]) => v === section)?.[0];
+            const contestsFromBackend = backendCategory ? data.categories[backendCategory] || [] : [];
+
+            const allRaw: any[] = contestsFromBackend.map((c: any) => ({
+                id: c.id,
+                name: c.name,
+                phase: c.phase,
+                type: c.type,
+                startTimeSeconds: c.startTimeSeconds,
+                category: section
+            }));
 
             // persist global + per-section right away
             try { localStorage.setItem(CONTESTS_KEY, JSON.stringify(allRaw)); localStorage.setItem(CONTESTS_KEY_TS, String(Date.now())); } catch { }
             for (const s of SECTION_CHIPS) {
                 const perKey = `${CONTESTS_KEY_SECTION_PREFIX}${s.replace(/\s+/g, "_").toLowerCase()}`;
-                try { const slice = allRaw.filter((c) => matchesSection(c, s)); localStorage.setItem(perKey, JSON.stringify(slice)); } catch { }
+                try { const slice = allRaw.filter((c: any) => matchesSection(c, s)); localStorage.setItem(perKey, JSON.stringify(slice)); } catch { }
             }
 
-            const filtered = allRaw.filter((c) => matchesSection(c, section));
-            filtered.sort((a, b) => Number(b.startTimeSeconds ?? 0) - Number(a.startTimeSeconds ?? 0));
+            const filtered: any[] = allRaw.filter((c: any) => matchesSection(c, section));
+            filtered.sort((a: any, b: any) => Number(b.startTimeSeconds ?? 0) - Number(a.startTimeSeconds ?? 0));
             setContests(filtered);
             setContestProblemsMap({});
-            const job: HardReloadJob = { status: "running", contestIds: filtered.map((c) => c.id), completed: 0, startedAt: Date.now() };
+            const job: HardReloadJob = { status: "running", contestIds: filtered.map((c: any) => c.id), completed: 0, startedAt: Date.now() };
             saveHardJob(sectionKey, job);
             void runHardReloadLoop(sectionKey, job);
         } catch (err: any) {
@@ -539,10 +595,73 @@ export default function Page(): React.ReactElement {
     const updateContests = useCallback(async () => {
         setLoadingContests(true); setErrorContests(null);
         try {
-            // Force fresh fetch, bypassing cache
-            const data = await fetchFreshJson(CF_CONTEST_LIST);
-            if (data?.status !== "OK") throw new Error("CF API not OK");
-            const allRaw = normalizeAndFilter(data.result || []);
+            // Step 1: Call backend sync endpoint to fetch NEW contests from Codeforces and save to MongoDB
+            // Backend will automatically check latest contest ID and only fetch newer ones
+            console.log('🔄 Syncing NEW contests from Codeforces to MongoDB...');
+            const syncResponse = await fetch(BACKEND_SYNC_CONTESTS, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+
+            if (!syncResponse.ok) {
+                throw new Error(`Sync failed: ${syncResponse.status}`);
+            }
+
+            const syncData = await syncResponse.json();
+            console.log(`✅ Sync complete: ${syncData.contestsInserted} new contests added`);
+
+            if (syncData.contestsInserted === 0) {
+                console.log('ℹ️ Already up to date - no new contests');
+                setLoadingContests(false); // Stop loading immediately
+                setErrorContests('✅ Already up to date - no new contests found');
+                setTimeout(() => setErrorContests(null), 3000); // Clear after 3 seconds
+                return; // Don't refetch if nothing changed
+            }
+
+            // Step 2: Only clear cache if there were new contests added
+            console.log('🗑️ Clearing cache to fetch updated data...');
+            if (typeof window !== "undefined" && "caches" in window) {
+                try {
+                    const cacheName = "cf-api-cache-sectioned";
+                    await caches.delete(cacheName);
+                    console.log('✅ Cache cleared');
+                } catch (e) {
+                    console.warn('Failed to clear cache:', e);
+                }
+            }
+
+            // Step 3: Fetch updated data from MongoDB with cache busting
+            const timestamp = Date.now();
+            const data = await fetchFreshJson(`${BACKEND_CONTESTS_BY_CATEGORY}?limit=10000&_t=${timestamp}`);
+            if (!data?.success) throw new Error("Backend API failed");
+
+            // Map backend category names to frontend section names
+            const categoryMap: Record<string, string> = {
+                'DIV1_DIV2': 'Div 1+2',
+                'DIV1': 'Div. 1',
+                'DIV2': 'Div. 2',
+                'DIV3': 'Div. 3',
+                'DIV4': 'Div. 4',
+                'GLOBAL': 'Global',
+                'EDUCATIONAL': 'Educational',
+                'OTHERS': 'Others'
+            };
+
+            // Flatten all categories into a single array for global cache
+            const allRaw: any[] = [];
+            for (const [backendCat, contests] of Object.entries(data.categories)) {
+                const frontendSection = categoryMap[backendCat] || 'Others';
+                (contests as any[]).forEach((c: any) => {
+                    allRaw.push({
+                        id: c.id,
+                        name: c.name,
+                        phase: c.phase || 'FINISHED',
+                        type: c.type,
+                        startTimeSeconds: c.startTimeSeconds,
+                        category: frontendSection
+                    });
+                });
+            }
 
             // save global list + timestamp
             try { localStorage.setItem(CONTESTS_KEY, JSON.stringify(allRaw)); localStorage.setItem(CONTESTS_KEY_TS, String(Date.now())); } catch { }
@@ -550,29 +669,33 @@ export default function Page(): React.ReactElement {
             // persist per-section durable cache
             for (const s of SECTION_CHIPS) {
                 const perKey = `${CONTESTS_KEY_SECTION_PREFIX}${s.replace(/\s+/g, "_").toLowerCase()}`;
-                try { const slice = allRaw.filter((c) => matchesSection(c, s)); localStorage.setItem(perKey, JSON.stringify(slice)); } catch { }
+                try { const slice = allRaw.filter((c: any) => matchesSection(c, s)); localStorage.setItem(perKey, JSON.stringify(slice)); } catch { }
             }
 
-            const filtered = allRaw.filter((c) => matchesSection(c, section));
-            filtered.sort((a, b) => Number(b.startTimeSeconds ?? 0) - Number(a.startTimeSeconds ?? 0));
+            const filtered: any[] = allRaw.filter((c: any) => matchesSection(c, section));
+            filtered.sort((a: any, b: any) => Number(b.startTimeSeconds ?? 0) - Number(a.startTimeSeconds ?? 0));
             setContests(filtered);
 
             setContestProblemsMap((mp) => {
                 const copy = { ...mp };
-                filtered.forEach((c) => { if (!Object.prototype.hasOwnProperty.call(copy, c.id)) copy[c.id] = copy[c.id] || []; });
+                filtered.forEach((c: any) => { if (!Object.prototype.hasOwnProperty.call(copy, c.id)) copy[c.id] = copy[c.id] || []; });
                 return copy;
             });
 
-            const first = filtered.slice(0, PAGE_SIZE).map((c) => c.id);
-            await Promise.all(first.map(async (cid) => {
+            const first = filtered.slice(0, PAGE_SIZE).map((c: any) => c.id);
+            await Promise.all(first.map(async (cid: any) => {
                 try { const db = await loadProblemsDB(cid); if (Array.isArray(db) && db.length) { setContestProblemsMap(m => ({ ...m, [cid]: db })); return; } } catch { }
                 try { const raw = localStorage.getItem(`${PROBLEM_KEY_PREFIX}${cid}`); const parsed = safeParse(raw); if (Array.isArray(parsed) && parsed.length) setContestProblemsMap(m => ({ ...m, [cid]: parsed })); } catch { }
             }));
 
-            schedulePrefetchSection(filtered.map((c) => c.id));
-        } catch (e) {
+            schedulePrefetchSection(filtered.map((c: any) => c.id));
+
+            // Show success message
+            setErrorContests(`✅ Successfully added ${syncData.contestsInserted} new contest(s)!`);
+            setTimeout(() => setErrorContests(null), 5000); // Clear after 5 seconds
+        } catch (e: any) {
             console.error("Update contests failed", e);
-            setErrorContests("⚠️ Failed to update contests for this section.");
+            setErrorContests("⚠️ Failed to update contests. " + (e.message || "Try again later."));
         } finally {
             setLoadingContests(false);
         }
@@ -604,9 +727,36 @@ export default function Page(): React.ReactElement {
         if (forceUpdate) {
             setLoadingContests(true);
             try {
-                const data = await fetchWithCacheJson(CF_CONTEST_LIST);
-                if (data?.status !== "OK") throw new Error("CF API not OK");
-                const allRaw = normalizeAndFilter(data.result || []);
+                const data = await fetchWithCacheJson(`${BACKEND_CONTESTS_BY_CATEGORY}?limit=10000`);
+                if (!data?.success) throw new Error("Backend API failed");
+
+                // Map backend category names to frontend section names
+                const categoryMap: Record<string, string> = {
+                    'DIV1_DIV2': 'Div 1+2',
+                    'DIV1': 'Div. 1',
+                    'DIV2': 'Div. 2',
+                    'DIV3': 'Div. 3',
+                    'DIV4': 'Div. 4',
+                    'GLOBAL': 'Global',
+                    'EDUCATIONAL': 'Educational',
+                    'OTHERS': 'Others'
+                };
+
+                // Flatten all categories into a single array for global cache
+                const allRaw: any[] = [];
+                for (const [backendCat, contests] of Object.entries(data.categories)) {
+                    const frontendSection = categoryMap[backendCat] || 'Others';
+                    (contests as any[]).forEach((c: any) => {
+                        allRaw.push({
+                            id: c.id,
+                            name: c.name,
+                            phase: c.phase || 'FINISHED',
+                            type: c.type,
+                            startTimeSeconds: c.startTimeSeconds,
+                            category: frontendSection
+                        });
+                    });
+                }
 
                 // save global list + timestamp
                 try { localStorage.setItem(CONTESTS_KEY, JSON.stringify(allRaw)); localStorage.setItem(CONTESTS_KEY_TS, String(Date.now())); } catch { }
@@ -614,26 +764,26 @@ export default function Page(): React.ReactElement {
                 // persist per-section durable cache
                 for (const s of SECTION_CHIPS) {
                     const perKey = `${CONTESTS_KEY_SECTION_PREFIX}${s.replace(/\s+/g, "_").toLowerCase()}`;
-                    try { const slice = allRaw.filter((c) => matchesSection(c, s)); localStorage.setItem(perKey, JSON.stringify(slice)); } catch { }
+                    try { const slice = allRaw.filter((c: any) => matchesSection(c, s)); localStorage.setItem(perKey, JSON.stringify(slice)); } catch { }
                 }
 
-                const filtered = allRaw.filter((c) => matchesSection(c, sectionName));
-                filtered.sort((a, b) => Number(b.startTimeSeconds ?? 0) - Number(a.startTimeSeconds ?? 0));
+                const filtered: any[] = allRaw.filter((c: any) => matchesSection(c, sectionName));
+                filtered.sort((a: any, b: any) => Number(b.startTimeSeconds ?? 0) - Number(a.startTimeSeconds ?? 0));
                 setContests(filtered);
 
                 setContestProblemsMap((mp) => {
                     const copy = { ...mp };
-                    filtered.forEach((c) => { if (!Object.prototype.hasOwnProperty.call(copy, c.id)) copy[c.id] = copy[c.id] || []; });
+                    filtered.forEach((c: any) => { if (!Object.prototype.hasOwnProperty.call(copy, c.id)) copy[c.id] = copy[c.id] || []; });
                     return copy;
                 });
 
-                const first = filtered.slice(0, PAGE_SIZE).map((c) => c.id);
-                await Promise.all(first.map(async (cid) => {
+                const first = filtered.slice(0, PAGE_SIZE).map((c: any) => c.id);
+                await Promise.all(first.map(async (cid: any) => {
                     try { const db = await loadProblemsDB(cid); if (Array.isArray(db) && db.length) { setContestProblemsMap(m => ({ ...m, [cid]: db })); return; } } catch { }
                     try { const raw = localStorage.getItem(`${PROBLEM_KEY_PREFIX}${cid}`); const parsed = safeParse(raw); if (Array.isArray(parsed) && parsed.length) setContestProblemsMap(m => ({ ...m, [cid]: parsed })); } catch { }
                 }));
 
-                schedulePrefetchSection(filtered.map((c) => c.id));
+                schedulePrefetchSection(filtered.map((c: any) => c.id));
             } catch (e) {
                 console.error("Update contests failed", e);
                 setErrorContests("⚠️ Failed to update contests for this section.");
@@ -742,29 +892,57 @@ export default function Page(): React.ReactElement {
                 console.warn("section snapshot IDB error", e);
             }
 
-            // 3) last resort: network fetch
+            // 3) last resort: network fetch from backend MongoDB database
             try {
-                const data = await fetchWithCacheJson(CF_CONTEST_LIST);
-                if (data?.status !== "OK") throw new Error("CF API not OK");
-                const all = normalizeAndFilter(data.result || []);
+                const data = await fetchWithCacheJson(`${BACKEND_CONTESTS_BY_CATEGORY}?limit=10000`);
+                if (!data?.success) throw new Error("Backend API failed");
+
+                // Map backend category names to frontend section names
+                const categoryMap: Record<string, string> = {
+                    'DIV1_DIV2': 'Div 1+2',
+                    'DIV1': 'Div. 1',
+                    'DIV2': 'Div. 2',
+                    'DIV3': 'Div. 3',
+                    'DIV4': 'Div. 4',
+                    'GLOBAL': 'Global',
+                    'EDUCATIONAL': 'Educational',
+                    'OTHERS': 'Others'
+                };
+
+                // Flatten all categories into a single array for global cache
+                const all: any[] = [];
+                for (const [backendCat, contests] of Object.entries(data.categories)) {
+                    const frontendSection = categoryMap[backendCat] || 'Others';
+                    (contests as any[]).forEach((c: any) => {
+                        all.push({
+                            id: c.id,
+                            name: c.name,
+                            phase: c.phase || 'FINISHED',
+                            type: c.type,
+                            startTimeSeconds: c.startTimeSeconds,
+                            category: frontendSection
+                        });
+                    });
+                }
+
                 try { localStorage.setItem(CONTESTS_KEY, JSON.stringify(all)); localStorage.setItem(CONTESTS_KEY_TS, String(Date.now())); } catch { }
                 // create per-section durable copies
                 for (const s of SECTION_CHIPS) {
                     const perKey = `${CONTESTS_KEY_SECTION_PREFIX}${s.replace(/\s+/g, "_").toLowerCase()}`;
-                    try { const slice = all.filter((c) => matchesSection(c, s)); localStorage.setItem(perKey, JSON.stringify(slice)); } catch { }
+                    try { const slice = all.filter((c: any) => matchesSection(c, s)); localStorage.setItem(perKey, JSON.stringify(slice)); } catch { }
                 }
 
-                const norm = all.filter((c) => matchesSection(c, sectionName));
-                norm.sort((a, b) => Number(b.startTimeSeconds ?? 0) - Number(a.startTimeSeconds ?? 0));
+                const norm: any[] = all.filter((c: any) => matchesSection(c, sectionName));
+                norm.sort((a: any, b: any) => Number(b.startTimeSeconds ?? 0) - Number(a.startTimeSeconds ?? 0));
                 setContests(norm);
 
-                const firstPage = norm.slice(0, PAGE_SIZE).map((c) => c.id);
-                await Promise.all(firstPage.map(async (cid) => {
+                const firstPage = norm.slice(0, PAGE_SIZE).map((c: any) => c.id);
+                await Promise.all(firstPage.map(async (cid: any) => {
                     try { const db = await loadProblemsDB(cid); if (Array.isArray(db) && db.length) { setContestProblemsMap(m => ({ ...m, [cid]: db })); return; } } catch { }
                     try { const raw = localStorage.getItem(`${PROBLEM_KEY_PREFIX}${cid}`); const parsed = safeParse(raw); if (Array.isArray(parsed) && parsed.length) setContestProblemsMap(m => ({ ...m, [cid]: parsed })); } catch { }
                 }));
 
-                schedulePrefetchSection(norm.map((c) => c.id));
+                schedulePrefetchSection(norm.map((c: any) => c.id));
             } catch (err: any) {
                 console.error("Contest fetch failed:", err);
                 setErrorContests("⚠️ Failed to fetch contest list for this section. Cached data (if any) will be used.");
@@ -793,6 +971,33 @@ export default function Page(): React.ReactElement {
     const refreshContest = useCallback(async (contestId: number) => {
         setPerContestLoading((m) => ({ ...m, [contestId]: true }));
         try {
+            // Clear all caches for this contest first
+            const key = `${PROBLEM_KEY_PREFIX}${contestId}`;
+
+            // Clear localStorage
+            try { localStorage.removeItem(key); } catch { }
+
+            // Clear IndexedDB
+            try {
+                const db = await openDB();
+                const tx = db.transaction(STORE_PROBLEMS, "readwrite");
+                await new Promise<void>((res, rej) => {
+                    const req = tx.objectStore(STORE_PROBLEMS).delete(String(contestId));
+                    req.onsuccess = () => res();
+                    req.onerror = () => rej(req.error);
+                });
+            } catch { }
+
+            // Clear Cache API
+            if (typeof window !== "undefined" && "caches" in window) {
+                try {
+                    const cacheName = "cf-api-cache-sectioned";
+                    const cache = await caches.open(cacheName);
+                    await cache.delete(BACKEND_CONTEST_BY_ID(contestId));
+                } catch { }
+            }
+
+            // Now fetch fresh data from backend
             const p = await fetchProblemsForContest(contestId, true);
             setContestProblemsMap((mp) => ({ ...mp, [contestId]: p || [] }));
         } catch (e) {
@@ -876,7 +1081,7 @@ export default function Page(): React.ReactElement {
                                 </button>
                             )} */}
 
-                            <button className="px-3 py-1 rounded-md bg-blue-600 text-white text-sm hover:bg-blue-500" onClick={updateContests} disabled={loadingContests} title="Fetch latest contests list and merge new finished contests for this section">
+                            <button className="px-3 py-1 rounded-md bg-blue-600 text-white text-sm hover:bg-blue-500" onClick={updateContests} disabled={loadingContests} title="Sync latest contests from Codeforces API and save to MongoDB database">
                                 Update contests
                             </button>
                         </div>
@@ -903,7 +1108,11 @@ export default function Page(): React.ReactElement {
                             </div>
                         )}
 
-                        {errorContests && <div className="p-4 text-red-600 dark:text-red-400">{errorContests}</div>}
+                        {errorContests && (
+                            <div className={`p-4 ${errorContests.startsWith('✅') ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                {errorContests}
+                            </div>
+                        )}
 
                         {!loadingContests && !errorContests && (
                             <div className="min-w-[900px]">
