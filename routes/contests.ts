@@ -52,16 +52,16 @@ router.post('/sync', async (req, res) => {
     try {
         console.log('🔄 Starting incremental contest sync from Codeforces...');
 
-        // Step 1: Get the latest contest ID from MongoDB
+        // Step 1: Get the latest contest by startTimeSeconds (most recent time)
         const latestContest = await Contest.findOne()
-            .sort({ id: -1 })
-            .limit(1)
+            .sort({ startTimeSeconds: -1 })
+            .select('startTimeSeconds')
             .lean();
 
-        const maxContestId = latestContest?.id || 0;
-        console.log(`📊 Latest contest ID in database: ${maxContestId}`);
+        const latestTime = latestContest?.startTimeSeconds || 0;
+        console.log(`📊 Latest contest in database: startTime=${latestTime} (${new Date(latestTime * 1000).toISOString()})`);
 
-        // Step 2: Fetch all contests from Codeforces (required to know what's new)
+        // Step 2: Fetch all contests from Codeforces
         const contestsResponse = await axios.get<{ status: string; result: CFContest[] }>(
             'https://codeforces.com/api/contest.list'
         );
@@ -72,13 +72,20 @@ router.post('/sync', async (req, res) => {
 
         const allContests: CFContest[] = contestsResponse.data.result;
 
-        // Step 3: Filter to only NEW FINISHED contests (ID > maxContestId AND phase === 'FINISHED')
-        const newContests = allContests.filter(contest =>
-            contest.id > maxContestId &&
-            contest.phase === 'FINISHED'
+        // Step 3: Filter to only FINISHED contests that started AFTER our latest contest
+        // Also check if contest ID already exists (to handle edge cases)
+        const existingIds = new Set(
+            (await Contest.find().select('id').lean()).map(c => c.id)
         );
 
-        console.log(`🆕 Found ${newContests.length} new FINISHED contests (out of ${allContests.length} total)`);
+        const newContests = allContests.filter(contest =>
+            contest.phase === 'FINISHED' &&
+            typeof contest.startTimeSeconds === 'number' &&
+            contest.startTimeSeconds > latestTime &&
+            !existingIds.has(contest.id)
+        );
+
+        console.log(`🆕 Found ${newContests.length} new FINISHED contests after ${new Date(latestTime * 1000).toISOString()} (out of ${allContests.length} total)`);
 
         // Early exit if no new contests
         if (newContests.length === 0) {
@@ -122,6 +129,13 @@ router.post('/sync', async (req, res) => {
 
         for (const contest of newContests) {
             const contestProblems = problemsByContest.get(contest.id) || [];
+
+            // Sort problems by index (A, B, C, D, E, etc.)
+            contestProblems.sort((a, b) => {
+                const indexA = a.index || '';
+                const indexB = b.index || '';
+                return indexA.localeCompare(indexB);
+            });
 
             const contestData = {
                 id: contest.id,
