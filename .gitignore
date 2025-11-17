@@ -1,5 +1,8 @@
 .history/
 
+# Frontend folder (separate repo)
+frontend/
+
 # Dependencies
 node_modules/
 */node_modules/
