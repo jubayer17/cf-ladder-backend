@@ -1,16 +1,15 @@
 {
   "version": 2,
-  "buildCommand": "cd backend && npm install && npm run build",
   "builds": [
     {
-      "src": "backend/api/index.ts",
+      "src": "api/index.ts",
       "use": "@vercel/node",
       "config": {
         "includeFiles": [
-          "backend/config/**",
-          "backend/routes/**",
-          "backend/models/**",
-          "backend/controllers/**"
+          "config/**",
+          "routes/**",
+          "models/**",
+          "controllers/**"
         ]
       }
     }
@@ -18,7 +17,13 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "backend/api/index.ts"
+      "dest": "api/index.ts",
+      "headers": {
+        "Access-Control-Allow-Credentials": "false",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET,OPTIONS,PATCH,DELETE,POST,PUT",
+        "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization, Cache-Control, Pragma, Expires"
+      }
     }
   ],
   "env": {

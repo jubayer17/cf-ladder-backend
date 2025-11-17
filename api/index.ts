@@ -14,11 +14,15 @@ const app = express();
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Cache-Control', 'Pragma', 'Expires'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Cache-Control', 'Pragma', 'Expires', 'X-Requested-With'],
+    exposedHeaders: ['Content-Length', 'Content-Type'],
     credentials: false,
     preflightContinue: false,
     optionsSuccessStatus: 204
 }));
+
+// Explicit OPTIONS handler for preflight
+app.options('*', cors());
 
 app.use(express.json());
 
