@@ -9,17 +9,9 @@
           "backend/config/**",
           "backend/controllers/**",
           "backend/models/**",
-          "backend/routes/**",
-          "backend/cache/**",
-          "backend/utils/**"
+          "backend/routes/**"
         ]
       }
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "backend/api/index.ts"
     }
   ]
 }
