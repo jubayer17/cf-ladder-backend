@@ -112,36 +112,50 @@ router.post('/sync', async (req, res) => {
             });
         }
 
-        // Step 4: Fetch all problems (we still need this to map problems to contests)
-        console.log('📥 Fetching problems from Codeforces API...');
-        const problemsResponse = await axios.get<ProblemsetResponse>(
-            'https://codeforces.com/api/problemset.problems',
-            { timeout: 30000 }
-        );
-
-        const allProblems: CFProblem[] = problemsResponse.data.status === 'OK'
-            ? problemsResponse.data.result.problems
-            : [];
-
-        console.log(`📊 Fetched ${allProblems.length} total problems from Codeforces`);
-
-        // Step 5: Group problems by contest ID - only for NEW contests
-        const newContestIds = new Set(newContests.map(c => c.id));
+        // Step 4: Fetch problems for each new contest using contest.standings API
+        // This API provides immediate access to problems, unlike problemset.problems which has delays
+        console.log('📥 Fetching problems for each new contest from contest.standings API...');
         const problemsByContest = new Map<number, CFProblem[]>();
 
-        allProblems.forEach(problem => {
-            if (problem.contestId && newContestIds.has(problem.contestId)) {
-                if (!problemsByContest.has(problem.contestId)) {
-                    problemsByContest.set(problem.contestId, []);
+        for (const contest of newContests) {
+            try {
+                console.log(`  Fetching problems for contest ${contest.id} (${contest.name})...`);
+                const standingsResponse = await axios.get(
+                    `https://codeforces.com/api/contest.standings?contestId=${contest.id}&from=1&count=1`,
+                    { timeout: 30000 }
+                );
+
+                if (standingsResponse.data.status === 'OK' && standingsResponse.data.result.problems) {
+                    const problems: CFProblem[] = standingsResponse.data.result.problems.map((p: any) => ({
+                        contestId: contest.id,
+                        index: p.index,
+                        name: p.name,
+                        type: p.type || 'PROGRAMMING',
+                        rating: p.rating,
+                        tags: p.tags || [],
+                        points: p.points
+                    }));
+                    problemsByContest.set(contest.id, problems);
+                    console.log(`    ✓ Found ${problems.length} problems for contest ${contest.id}`);
+                } else {
+                    console.warn(`    ⚠️ No problems found for contest ${contest.id}`);
+                    problemsByContest.set(contest.id, []);
                 }
-                problemsByContest.get(problem.contestId)!.push(problem);
+            } catch (error: any) {
+                console.error(`    ❌ Failed to fetch problems for contest ${contest.id}:`, error.message);
+                problemsByContest.set(contest.id, []);
             }
-        });
+
+            // Add delay between requests to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+
+        console.log(`📊 Fetched problems for ${problemsByContest.size} contests`);
 
         let contestsInserted = 0;
         let contestsUpdated = 0;
 
-        // Step 6: Insert or update only NEW contests with their problems
+        // Step 5: Insert or update only NEW contests with their problems
         const contestsToInsert = [];
 
         for (const contest of newContests) {
@@ -643,9 +657,9 @@ router.post('/:contestId/refresh', async (req, res) => {
         );
 
         if (problemsResponse.data.status !== 'OK') {
-            return res.status(500).json({ 
-                success: false, 
-                error: 'Failed to fetch problems from Codeforces' 
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to fetch problems from Codeforces'
             });
         }
 
