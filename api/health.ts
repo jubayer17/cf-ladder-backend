@@ -1,8 +1,10 @@
 import type { Request, Response } from 'express';
 import mongoose from 'mongoose';
+import connectDB from '../config/database.js'; // your DB connect function
 
 export default async function handler(req: Request, res: Response) {
     try {
+        await connectDB(); // ensure DB is connected
         const mongoStatus = mongoose.connection.readyState;
         const statusMap: Record<number, string> = {
             0: 'disconnected',
