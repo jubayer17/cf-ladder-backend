@@ -2,9 +2,9 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
-import connectDB from '../config/database.js';
-import problemRoutes from '../routes/problems.js';
-import contestRoutes from '../routes/contests.js';
+import connectDB from '../config/database';
+import problemRoutes from '../routes/problems';
+import contestRoutes from '../routes/contests';
 
 dotenv.config();
 
