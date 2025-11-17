@@ -10,6 +10,8 @@ frontend/out/
 frontend/build/
 backend/dist/
 backend/build/
+dist/
+build/
 
 # Environment files
 .env
@@ -44,6 +46,21 @@ backend/cache/
 # Testing
 coverage/
 .nyc_output/
+
+# Test and utility scripts
+test-*.ts
+test-*.mjs
+test-*.js
+*-test.ts
+*-test.mjs
+*-test.js
+quick-test.*
+call-sync.ts
+sync-contests.ts
+populate-from-cache.ts
+fetch-contest-names.ts
+verify-data.ts
+cleanup-*.mjs
 
 # Misc
 *.log
