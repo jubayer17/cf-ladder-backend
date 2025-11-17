@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "buildCommand": "cd backend && npm install && npm run build",
+  "builds": [
+    {
+      "src": "backend/api/index.ts",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": [
+          "backend/config/**",
+          "backend/routes/**",
+          "backend/models/**",
+          "backend/controllers/**"
+        ]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "backend/api/index.ts"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
