@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
+
 import connectDB from '../config/database.js';
 import problemRoutes from '../routes/problems.js';
 import contestRoutes from '../routes/contests.js';
@@ -10,23 +11,18 @@ dotenv.config();
 
 const app = express();
 
-// Enable CORS for all origins with preflight
+// CORS
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Cache-Control', 'Pragma', 'Expires', 'X-Requested-With'],
-    exposedHeaders: ['Content-Length', 'Content-Type'],
-    credentials: false,
-    preflightContinue: false,
-    optionsSuccessStatus: 204
+    credentials: false
 }));
 
-// Explicit OPTIONS handler for preflight
 app.options('*', cors());
-
 app.use(express.json());
 
-// Initialize MongoDB connection (don't wait for it to block startup)
+// Start DB connection once
 let dbConnectionPromise: Promise<void> | null = null;
 
 const initDB = async () => {
@@ -36,96 +32,57 @@ const initDB = async () => {
     return dbConnectionPromise;
 };
 
-// Start connection immediately
 initDB().catch(err => {
-    console.error('❌ Initial MongoDB connection failed:', err.message);
+    console.error('❌ Initial MongoDB connect failed:', err.message);
 });
 
-// Middleware to ensure DB is connected before processing requests
+// Middleware: ensure DB connected
 const ensureDBConnection = async (req: Request, res: Response, next: NextFunction) => {
-    // Skip DB check for health endpoint
     if (req.path === '/api/health' || req.path === '/' || req.path === '/api') {
         return next();
     }
 
     try {
-        const CONNECTED = 1; // mongoose.connection.readyState === 1 means connected
+        const CONNECTED = 1;
 
-        // Try to connect if not already connected
-        if ((mongoose.connection.readyState as number) !== CONNECTED) {
-            console.log('⏳ Waiting for MongoDB connection...');
+        if (mongoose.connection.readyState !== CONNECTED) {
             await initDB();
-
-            // Wait a bit more if still connecting
-            let retries = 0;
-            const maxRetries = 5;
-            while ((mongoose.connection.readyState as number) !== CONNECTED && retries < maxRetries) {
-                await new Promise(resolve => setTimeout(resolve, 500));
-                retries++;
-            }
         }
 
-        if ((mongoose.connection.readyState as number) !== CONNECTED) {
+        if (mongoose.connection.readyState !== CONNECTED) {
             return res.status(503).json({
                 success: false,
-                error: 'Database connection not available. Please try again in a moment.',
-                dbState: mongoose.connection.readyState
+                error: 'Database unavailable.'
             });
         }
 
         next();
     } catch (error: any) {
-        console.error('❌ DB connection middleware error:', error.message);
-        res.status(503).json({
-            success: false,
-            error: 'Database connection failed',
-            message: error.message
-        });
+        console.error('❌ DB middleware:', error.message);
+        res.status(503).json({ success: false, error: error.message });
     }
 };
 
-// Health check endpoint with detailed diagnostics
+// Health route
 app.get('/api/health', (req, res) => {
-    const mongoStatus = mongoose.connection.readyState;
-    const statusMap: Record<number, string> = {
-        0: 'disconnected',
-        1: 'connected',
-        2: 'connecting',
-        3: 'disconnecting'
-    };
+    const state = mongoose.connection.readyState;
+    const status = ['disconnected', 'connected', 'connecting', 'disconnecting'];
 
     res.json({
         status: 'ok',
-        mongodb: statusMap[mongoStatus] || 'unknown',
-        env: {
-            hasMongoUri: !!process.env.MONGODB_URI,
-            nodeEnv: process.env.NODE_ENV
-        },
+        mongodb: status[state] || 'unknown',
         timestamp: new Date().toISOString()
     });
 });
 
 // Root route
 app.get('/', (req, res) => {
-    res.json({ status: 'ok', message: '✅ Server is running successfully!' });
+    res.json({ status: 'ok', message: 'Server running' });
 });
 
 app.get('/api', (req, res) => {
-    res.json({ status: 'ok', message: '✅ API is running!' });
+    res.json({ status: 'ok', message: 'API running' });
 });
 
-// Apply DB connection middleware to API routes
+// Routes
 app.use('/api/problems', ensureDBConnection, problemRoutes);
-app.use('/api/contests', ensureDBConnection, contestRoutes);
-
-// Error handler
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-    console.error('❌ Error:', err);
-    res.status(500).json({
-        success: false,
-        error: err.message || 'Internal server error',
-        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    });
-});
-
-export default app;
