@@ -1,4 +1,3 @@
-import serverless from 'serverless-http';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -8,21 +7,28 @@ import contestRoutes from './routes/contests.js';
 
 dotenv.config();
 
-// Connect to MongoDB (use try/catch to avoid crashing)
-connectDB().catch(err => console.error('❌ MongoDB connection failed:', err));
-
 const app = express();
 
-// CORS & JSON
+// Connect to MongoDB
+connectDB()
+    .then(() => console.log('✅ MongoDB connected successfully'))
+    .catch(err => console.error('❌ MongoDB connection error:', err));
+
+// Middlewares
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
 // Root route
-app.get('/', (req, res) => res.send('✅ Server is running successfully fuckk!'));
+app.get('/', (req, res) => {
+    res.send('🚀 Local server is running perfectly!');
+});
 
-// API routes
+// Routes
 app.use('/api/problems', problemRoutes);
 app.use('/api/contests', contestRoutes);
 
-// ✅ Vercel requires a default export for serverless functions
-export default serverless(app);
+// Start server locally
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+    console.log(`🔥 Server is live at http://localhost:${PORT}`);
+});
