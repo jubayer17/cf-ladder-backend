@@ -41,10 +41,6 @@ Thumbs.db
 *.swo
 *~
 
-# Cache
-.cache/
-backend/cache/
-*.cache.json
 
 # Testing
 coverage/
