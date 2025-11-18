@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 
 const MONGO_URI = process.env.MONGODB_URI;
-if (!MONGO_URI) throw new Error('❌ MONGODB_URI not set');
 
 type Cached = {
     conn: typeof mongoose | null;
@@ -16,6 +15,12 @@ const globalRef: any = globalThis;
 if (!globalRef._mongooseCache) globalRef._mongooseCache = { conn: null, promise: null };
 
 export default async function connectDB(): Promise<void> {
+    if (!MONGO_URI) {
+        // Don't throw at module import time in serverless environment —
+        // throw here so callers can handle the error and return a proper response.
+        throw new Error('❌ MONGODB_URI not set');
+    }
+
     if (globalRef._mongooseCache.conn) return;
     if (!globalRef._mongooseCache.promise) {
         mongoose.set('bufferCommands', false);
