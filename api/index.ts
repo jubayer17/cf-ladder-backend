@@ -10,7 +10,7 @@ dotenv.config();
 
 const app = express();
 
-// Connect DB (must be outside handler)
+// Connect to MongoDB (outside handler)
 connectDB()
     .then(() => console.log("✅ MongoDB connected (serverless)"))
     .catch((err) => console.log("❌ MongoDB error:", err));
@@ -18,12 +18,17 @@ connectDB()
 app.use(cors());
 app.use(express.json());
 
+// Root route
 app.get("/", (req, res) => {
     res.send("🔥 Serverless API running on Vercel!");
 });
 
-app.use("/problems", problemRoutes);
-app.use("/contests", contestRoutes);
+// Favicon route to prevent 404
+app.get("/favicon.ico", (req, res) => res.status(204).end());
+
+// API routes
+app.use("/api/problems", problemRoutes);
+app.use("/api/contests", contestRoutes);
 
 export const handler = serverless(app);
 export default handler;
