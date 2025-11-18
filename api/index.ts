@@ -1,34 +1,24 @@
-import serverless from 'serverless-http';
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import connectDB from '../config/database.js';
 import problemRoutes from '../routes/problems.js';
 import contestRoutes from '../routes/contests.js';
 
-dotenv.config();
-
 const app = express();
 
-// Connect to MongoDB (outside handler)
-connectDB()
-    .then(() => console.log("✅ MongoDB connected (serverless)"))
-    .catch((err) => console.log("❌ MongoDB error:", err));
-
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Root route
-app.get("/", (req, res) => {
-    res.send("🔥 Serverless API running on Vercel!");
-});
+// MongoDB connection
+connectDB()
+    .then(() => console.log('✅ MongoDB connected'))
+    .catch(err => console.error('❌ MongoDB connection error:', err));
 
-// Favicon route to prevent 404
-app.get("/favicon.ico", (req, res) => res.status(204).end());
+// Routes
+app.get('/', (req, res) => res.send('🔥 Backend is live'));
+app.use('/api/problems', problemRoutes);
+app.use('/api/contests', contestRoutes);
 
-// API routes
-app.use("/api/problems", problemRoutes);
-app.use("/api/contests", contestRoutes);
-
-export const handler = serverless(app);
-export default handler;
+export default app; // Vercel handles listen
