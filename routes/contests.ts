@@ -4,11 +4,12 @@ import mongoose from 'mongoose';
 import Contest from '../models/Contest.js';
 import fs from 'fs/promises';
 import path from 'path';
-
+import pLimit from 'p-limit';
 const router = express.Router();
+const limit = pLimit(5);
 const CACHE_FILE = path.join(process.cwd(), 'cache', 'contests.cache.json');
 const CACHE_DURATION = 6 * 60 * 60 * 1000; // 6 hours
-
+const problemsByContest = new Map<number, CFProblem[]>();
 interface CFContest {
     id: number;
     name: string;
@@ -117,38 +118,36 @@ router.post('/sync', async (req, res) => {
         console.log('📥 Fetching problems for each new contest from contest.standings API...');
         const problemsByContest = new Map<number, CFProblem[]>();
 
-        for (const contest of newContests) {
-            try {
-                console.log(`  Fetching problems for contest ${contest.id} (${contest.name})...`);
-                const standingsResponse = await axios.get(
-                    `https://codeforces.com/api/contest.standings?contestId=${contest.id}&from=1&count=1`,
-                    { timeout: 30000 }
-                );
+        await Promise.all(newContests.map(contest =>
+            limit(async () => {
+                try {
+                    console.log(`Fetching problems for contest ${contest.id}`);
+                    const resp = await axios.get(
+                        `https://codeforces.com/api/contest.standings?contestId=${contest.id}&from=1&count=1`,
+                        { timeout: 30000 }
+                    );
 
-                if (standingsResponse.data.status === 'OK' && standingsResponse.data.result.problems) {
-                    const problems: CFProblem[] = standingsResponse.data.result.problems.map((p: any) => ({
-                        contestId: contest.id,
-                        index: p.index,
-                        name: p.name,
-                        type: p.type || 'PROGRAMMING',
-                        rating: p.rating,
-                        tags: p.tags || [],
-                        points: p.points
-                    }));
-                    problemsByContest.set(contest.id, problems);
-                    console.log(`    ✓ Found ${problems.length} problems for contest ${contest.id}`);
-                } else {
-                    console.warn(`    ⚠️ No problems found for contest ${contest.id}`);
+                    if (resp.data.status === 'OK' && resp.data.result.problems) {
+                        const problems = resp.data.result.problems.map((p: any) => ({
+                            contestId: contest.id,
+                            index: p.index,
+                            name: p.name,
+                            type: p.type || 'PROGRAMMING',
+                            rating: p.rating,
+                            tags: p.tags || [],
+                            points: p.points
+                        }));
+                        problemsByContest.set(contest.id, problems);
+                    } else {
+                        problemsByContest.set(contest.id, []);
+                    }
+                } catch (e) {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    console.warn(`Failed to fetch problems for contest ${contest.id}`, msg);
                     problemsByContest.set(contest.id, []);
                 }
-            } catch (error: any) {
-                console.error(`    ❌ Failed to fetch problems for contest ${contest.id}:`, error.message);
-                problemsByContest.set(contest.id, []);
-            }
-
-            // Add delay between requests to avoid rate limiting
-            await new Promise(resolve => setTimeout(resolve, 300));
-        }
+            })
+        ));
 
         console.log(`📊 Fetched problems for ${problemsByContest.size} contests`);
 
@@ -507,8 +506,15 @@ router.post('/:id/refresh', async (req, res) => {
 router.get('/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        const contestId = parseInt(id);
 
-        const contest = await Contest.findOne({ id: parseInt(id) }).lean();
+        if (isNaN(contestId)) {
+            return res.status(400).json({
+                error: 'Invalid contest ID. Must be a number.'
+            });
+        }
+
+        const contest = await Contest.findOne({ id: contestId }).lean();
 
         if (!contest) {
             return res.status(404).json({ error: 'Contest not found' });
