@@ -11,21 +11,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Top-level async initializer
-(async () => {
-    try {
-        console.log("⏳ Connecting to MongoDB...");
-        await connectDB(); // MUST finish before adding routes
-        console.log("✅ MongoDB connected");
+// MongoDB connection
+connectDB()
+    .then(() => console.log('✅ MongoDB connected'))
+    .catch(err => console.error('❌ MongoDB connection error:', err));
 
-        // Now safe to load routes
-        app.get('/', (req, res) => res.send('🔥 Backend is live'));
-        app.use('/api/problems', problemRoutes);
-        app.use('/api/contests', contestRoutes);
+// Routes
+app.get('/', (req, res) => res.send('🔥 Backend is live'));
+app.use('/api/problems', problemRoutes);
+app.use('/api/contests', contestRoutes);
 
-    } catch (err) {
-        console.error("❌ MongoDB connection error:", err);
-    }
-})();
-
-export default app; // Vercel picks this immediately
+export default app; // Vercel handles listen
