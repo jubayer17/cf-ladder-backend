@@ -11,14 +11,24 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MongoDB connection
-connectDB()
-    .then(() => console.log('✅ MongoDB connected'))
-    .catch(err => console.error('❌ MongoDB connection error:', err));
+// Wrap everything in an async initializer
+async function init() {
+    try {
+        console.log("⏳ Connecting to MongoDB...");
+        await connectDB(); // 🔥 THIS is the fix
+        console.log("✅ MongoDB connected");
 
-// Routes
-app.get('/', (req, res) => res.send('🔥 Backend is live'));
-app.use('/api/problems', problemRoutes);
-app.use('/api/contests', contestRoutes);
+        // 🔥 Load routes ONLY AFTER DB is connected
+        app.get('/', (req, res) => res.send('🔥 Backend is live'));
+        app.use('/api/problems', problemRoutes);
+        app.use('/api/contests', contestRoutes);
+
+    } catch (err) {
+        console.error("❌ MongoDB connection error:", err);
+    }
+}
+
+// IMPORTANT: run initializer immediately
+init();
 
 export default app; // Vercel handles listen
