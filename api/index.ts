@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import connectDB from '../config/database.js';
+import mongoose from 'mongoose';
 import problemRoutes from '../routes/problems.js';
 import contestRoutes from '../routes/contests.js';
 
@@ -36,7 +37,6 @@ app.use(async (req, res, next) => {
     }
 
     try {
-        const mongoose = require('mongoose');
         if (!mongoose.connection || mongoose.connection.readyState !== 1) {
             await connectDB();
         }
