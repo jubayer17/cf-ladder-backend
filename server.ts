@@ -1,5 +1,37 @@
 import 'dotenv/config'; // MUST BE FIRST for ts-node + ESM
 
+// Global handlers to capture thrown non-Error objects and unhandled rejections
+process.on('uncaughtException', (err) => {
+    try {
+        console.error('UNCAUGHT EXCEPTION:');
+        if (err && err.stack) console.error(err.stack);
+        else console.error(err);
+        if (err && typeof err === 'object' && !('stack' in err)) {
+            try {
+                console.error('Thrown object details:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
+            } catch {}
+        }
+    } finally {
+        // exit so nodemon or the caller can restart and we don't continue in a bad state
+        process.exit(1);
+    }
+});
+
+process.on('unhandledRejection', (reason) => {
+    try {
+        console.error('UNHANDLED REJECTION:');
+        if (reason && (reason as any).stack) console.error((reason as any).stack);
+        else console.error(reason);
+        if (reason && typeof reason === 'object' && !('stack' in reason)) {
+            try {
+                console.error('Rejection object details:', JSON.stringify(reason, Object.getOwnPropertyNames(reason), 2));
+            } catch {}
+        }
+    } finally {
+        process.exit(1);
+    }
+});
+
 import express from 'express';
 import cors from 'cors';
 import connectDB from './config/database.js';

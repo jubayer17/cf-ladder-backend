@@ -63,45 +63,144 @@ router.post('/sync', async (req, res) => {
 
         console.log('🔄 Starting incremental contest sync from Codeforces...');
 
-        // Step 1: Get the latest contest by startTimeSeconds (most recent time)
-        const latestContest = await Contest.findOne()
-            .sort({ startTimeSeconds: -1 })
-            .select('startTimeSeconds id')
-            .lean();
 
-        const latestTime = latestContest?.startTimeSeconds || 0;
-        console.log(`📊 Latest contest in database: ID=${latestContest?.id}, startTime=${latestTime} (${new Date(latestTime * 1000).toISOString()})`);
+        // Determine starting point based on latest contest in DB (by startTime)
+        const latestContestInDb = await Contest.findOne().sort({ startTimeSeconds: -1 }).select('id startTimeSeconds').lean();
+        const END_TS = Math.floor(Date.now() / 1000);
 
-        // Step 2 (incremental): Probe Codeforces for contests with IDs greater than
-        // the highest contest ID we have in the database. This avoids fetching the
-        // entire contest list and inserts only truly new contests.
-        console.log('📥 Probing Codeforces for new contests by ID...');
+        let startProbeId = 2172;
+        let lastKnownStartTime = 0;
 
-        // Highest contest ID already in DB
-        const highestContest = await Contest.findOne().sort({ id: -1 }).select('id startTimeSeconds').lean();
-        const highestId = highestContest?.id || 0;
-        console.log(`🔎 Highest contest ID in DB: ${highestId}`);
+        if (latestContestInDb && latestContestInDb.startTimeSeconds) {
+            lastKnownStartTime = latestContestInDb.startTimeSeconds;
+            // start probing from the next ID after the highest ID we have
+            if (latestContestInDb.id && Number.isFinite(latestContestInDb.id)) {
+                startProbeId = latestContestInDb.id + 1;
+            }
+            console.log(`🔎 Latest contest in DB: id=${latestContestInDb.id}, startTime=${lastKnownStartTime}`);
+        } else {
+            // No contests in DB: try to fetch contest 2172 to use its startTime as baseline
+            try {
+                const seedResp = await axios.get('https://codeforces.com/api/contest.standings?contestId=2172&from=1&count=1', { timeout: 20000 });
+                if (seedResp.data && seedResp.data.status === 'OK' && seedResp.data.result && seedResp.data.result.contest) {
+                    const c = seedResp.data.result.contest as any;
+                    if (typeof c.startTimeSeconds === 'number') {
+                        lastKnownStartTime = c.startTimeSeconds;
+                        console.log(`ℹ️ Seed contest 2172 startTime=${lastKnownStartTime}`);
+                    }
+                }
+            } catch (e: any) {
+                console.warn('⚠️ Could not fetch seed contest 2172:', e?.message || e);
+            }
+        }
 
-        const MAX_CONSECUTIVE_MISSES = 10; // stop after this many consecutive missing IDs (reduced as requested)
-        const MAX_PROBES = 5000; // upper cap to avoid infinite loops
+        console.log('📥 Querying Codeforces contest.list to discover contests between last known time and today');
 
-        let consecutiveMisses = 0;
-        let probes = 0;
         const discoveredContests: CFContest[] = [];
         const discoveredProblems = new Map<number, CFProblem[]>();
 
-        // Probe sequentially starting from next ID
-        for (let cid = highestId + 1; consecutiveMisses < MAX_CONSECUTIVE_MISSES && probes < MAX_PROBES; cid++) {
-            probes++;
-            try {
-                console.log(`Probing contest ID ${cid}...`);
-                const resp = await axios.get(
-                    `https://codeforces.com/api/contest.standings?contestId=${cid}&from=1&count=1`,
-                    { timeout: 20000 }
-                );
+        try {
+            const listResp = await axios.get('https://codeforces.com/api/contest.list', { timeout: 30000 });
+            if (listResp.data && listResp.data.status === 'OK' && Array.isArray(listResp.data.result)) {
+                const allContests = listResp.data.result as any[];
 
-                if (resp.data && resp.data.status === 'OK' && resp.data.result && resp.data.result.contest) {
+                // Filter contests whose startTimeSeconds is greater than lastKnownStartTime and <= END_TS
+                const candidates = allContests
+                    .filter(c => typeof c.startTimeSeconds === 'number')
+                    .filter(c => c.startTimeSeconds > lastKnownStartTime && c.startTimeSeconds <= END_TS)
+                    // prefer finished contests
+                    .filter(c => (c.phase || 'FINISHED') === 'FINISHED')
+                    // sort ascending by startTime so we insert oldest-first
+                    .sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
+
+                console.log(`🔎 contest.list returned ${allContests.length} contests, ${candidates.length} candidates after filtering`);
+
+                // Limit number processed to avoid overloading
+                const MAX_TO_PROCESS = 1000;
+                const toProcess = candidates.slice(0, MAX_TO_PROCESS);
+
+                // Fetch problems for each candidate with concurrency limit
+                const tasks = toProcess.map((c: any) => limit(async () => {
+                    const cid = c.id;
+                    try {
+                        const standingsResp = await axios.get(
+                            `https://codeforces.com/api/contest.standings?contestId=${cid}&from=1&count=1`,
+                            { timeout: 20000 }
+                        );
+                        const problemsRaw = Array.isArray(standingsResp.data.result?.problems) ? standingsResp.data.result.problems : [];
+                        const problemsArr: CFProblem[] = problemsRaw.map((p: any) => ({
+                            contestId: cid,
+                            index: p.index,
+                            name: p.name,
+                            type: p.type || 'PROGRAMMING',
+                            rating: p.rating,
+                            tags: p.tags || [],
+                            points: p.points
+                        }));
+
+                        const contestObj: CFContest = {
+                            id: c.id,
+                            name: c.name,
+                            type: c.type || 'PROGRAMMING',
+                            phase: c.phase || 'FINISHED',
+                            frozen: !!c.frozen,
+                            durationSeconds: c.durationSeconds || 0,
+                            startTimeSeconds: c.startTimeSeconds,
+                            relativeTimeSeconds: c.relativeTimeSeconds,
+                            preparedBy: c.preparedBy,
+                            websiteUrl: c.websiteUrl,
+                            description: c.description,
+                            difficulty: c.difficulty,
+                            kind: c.kind,
+                            icpcRegion: c.icpcRegion,
+                            country: c.country,
+                            city: c.city,
+                            season: c.season
+                        };
+
+                        discoveredContests.push(contestObj);
+                        discoveredProblems.set(cid, problemsArr);
+                        console.log(`  → Candidate contest ${cid} queued (problems ${problemsArr.length})`);
+                    } catch (e: any) {
+                        console.warn(`  × failed to fetch problems for contest ${cid}:`, e?.message || e);
+                    }
+                }));
+
+                await Promise.all(tasks);
+            } else {
+                console.warn('⚠️ contest.list returned unexpected result, falling back to ID probing');
+            }
+        } catch (e: any) {
+            console.warn('⚠️ contest.list failed:', e?.message || e, 'Falling back to ID probing');
+
+            // Fallback to ID-probing starting at startProbeId (previous behaviour)
+            const MAX_CONSECUTIVE_MISSES = 50;
+            const MAX_PROBES = 20000;
+            let consecutiveMisses = 0;
+            let probes = 0;
+
+            for (let cid = startProbeId; consecutiveMisses < MAX_CONSECUTIVE_MISSES && probes < MAX_PROBES; cid++) {
+                probes++;
+                try {
+                    console.log(`Probing contest ID ${cid}...`);
+                    const resp = await axios.get(
+                        `https://codeforces.com/api/contest.standings?contestId=${cid}&from=1&count=1`,
+                        { timeout: 20000 }
+                    );
+
+                    if (!(resp.data && resp.data.status === 'OK' && resp.data.result && resp.data.result.contest)) {
+                        consecutiveMisses++;
+                        continue;
+                    }
+
                     const c = resp.data.result.contest as any;
+                    const startTime: number | undefined = c.startTimeSeconds;
+
+                    if (typeof startTime === 'number' && startTime > END_TS) {
+                        console.log(`Reached contest in future at ID ${cid} (startTime ${startTime}), stopping.`);
+                        break;
+                    }
+
                     const problemsRaw = Array.isArray(resp.data.result.problems) ? resp.data.result.problems : [];
                     const problemsArr: CFProblem[] = problemsRaw.map((p: any) => ({
                         contestId: cid,
@@ -133,26 +232,26 @@ router.post('/sync', async (req, res) => {
                         season: c.season
                     };
 
-                    // Only consider finished contests and those with a start time
                     if (contestObj.phase === 'FINISHED' && typeof contestObj.startTimeSeconds === 'number') {
-                        discoveredContests.push(contestObj);
-                        discoveredProblems.set(cid, problemsArr);
-                        consecutiveMisses = 0; // reset on found
-                        console.log(`  → Found contest ${cid} (${contestObj.name}) with ${problemsArr.length} problems`);
+                        if (contestObj.startTimeSeconds > lastKnownStartTime && contestObj.startTimeSeconds <= END_TS) {
+                            discoveredContests.push(contestObj);
+                            discoveredProblems.set(cid, problemsArr);
+                            consecutiveMisses = 0;
+                            console.log(`  → Found contest ${cid} (${contestObj.name}) with ${problemsArr.length} problems`);
+                        } else {
+                            consecutiveMisses++;
+                        }
                     } else {
                         consecutiveMisses++;
                     }
-                } else {
+                } catch (err: any) {
                     consecutiveMisses++;
+                    console.warn(`  × no contest at ID ${cid} (${err?.message || 'no response'})`);
                 }
-            } catch (err: any) {
-                // Many IDs will not exist — count as a miss and continue
-                consecutiveMisses++;
-                console.warn(`  × no contest at ID ${cid} (${err?.message || 'no response'})`);
             }
         }
 
-        console.log(`📊 Probing complete. Discovered ${discoveredContests.length} new candidate contests after probing ${probes} IDs`);
+        console.log(`📊 Discovery complete. Discovered ${discoveredContests.length} new candidate contests`);
 
         // Early exit if nothing discovered
         if (discoveredContests.length === 0) {
