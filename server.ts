@@ -9,7 +9,7 @@ process.on('uncaughtException', (err) => {
         if (err && typeof err === 'object' && !('stack' in err)) {
             try {
                 console.error('Thrown object details:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
-            } catch {}
+            } catch { }
         }
     } finally {
         // exit so nodemon or the caller can restart and we don't continue in a bad state
@@ -25,7 +25,7 @@ process.on('unhandledRejection', (reason) => {
         if (reason && typeof reason === 'object' && !('stack' in reason)) {
             try {
                 console.error('Rejection object details:', JSON.stringify(reason, Object.getOwnPropertyNames(reason), 2));
-            } catch {}
+            } catch { }
         }
     } finally {
         process.exit(1);
