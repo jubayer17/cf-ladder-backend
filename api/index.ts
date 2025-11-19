@@ -11,24 +11,39 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// MongoDB connection: don't block module import — ensure connections before handling requests
-// We'll still call connectDB() eagerly to start connection, but also add a middleware
-// that will await the connection for incoming requests to avoid mongoose buffer errors.
-connectDB()
-    .then(() => console.log('✅ MongoDB connected'))
-    .catch(err => console.error('❌ MongoDB connection error:', err));
+// MongoDB connection handling
+const MONGO_URI = process.env.MONGODB_URI;
+const mongoUriMissing = !MONGO_URI;
 
-// Ensure DB is connected before handling requests. This middleware will await
-// the shared `connectDB()` promise if the connection isn't ready yet.
+if (mongoUriMissing) {
+    console.warn('⚠️ MONGODB_URI is not set. Backend will run but DB routes will return a clear error.');
+} else {
+    // Start connection eagerly
+    connectDB()
+        .then(() => console.log('✅ MongoDB connected'))
+        .catch(err => console.error('❌ MongoDB connection error:', err));
+}
+
+// Ensure DB is connected before handling requests. If MONGO_URI is missing, return
+// a helpful error telling the deployer to set the variable in Vercel.
 app.use(async (req, res, next) => {
+    if (mongoUriMissing) {
+        return res.status(503).json({
+            success: false,
+            error: 'Database connection not available',
+            details: 'MONGODB_URI environment variable is not set. Set it in your Vercel project settings and redeploy.'
+        });
+    }
+
     try {
-        if (!require('mongoose').connection || require('mongoose').connection.readyState !== 1) {
+        const mongoose = require('mongoose');
+        if (!mongoose.connection || mongoose.connection.readyState !== 1) {
             await connectDB();
         }
         return next();
     } catch (err: any) {
         console.error('❌ DB connection unavailable in middleware:', err?.message || err);
-        return res.status(503).json({ success: false, error: 'Database connection not available' });
+        return res.status(503).json({ success: false, error: 'Database connection not available', details: err?.message || null });
     }
 });
 
