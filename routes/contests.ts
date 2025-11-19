@@ -72,38 +72,91 @@ router.post('/sync', async (req, res) => {
         const latestTime = latestContest?.startTimeSeconds || 0;
         console.log(`📊 Latest contest in database: ID=${latestContest?.id}, startTime=${latestTime} (${new Date(latestTime * 1000).toISOString()})`);
 
-        // Step 2: Fetch all contests from Codeforces
-        console.log('📥 Fetching contests from Codeforces API...');
-        const contestsResponse = await axios.get<{ status: string; result: CFContest[] }>(
-            'https://codeforces.com/api/contest.list',
-            { timeout: 30000 }
-        );
+        // Step 2 (incremental): Probe Codeforces for contests with IDs greater than
+        // the highest contest ID we have in the database. This avoids fetching the
+        // entire contest list and inserts only truly new contests.
+        console.log('📥 Probing Codeforces for new contests by ID...');
 
-        if (contestsResponse.data.status !== 'OK') {
-            return res.status(500).json({ error: 'Failed to fetch contests from Codeforces' });
+        // Highest contest ID already in DB
+        const highestContest = await Contest.findOne().sort({ id: -1 }).select('id startTimeSeconds').lean();
+        const highestId = highestContest?.id || 0;
+        console.log(`🔎 Highest contest ID in DB: ${highestId}`);
+
+        const MAX_CONSECUTIVE_MISSES = 10; // stop after this many consecutive missing IDs (reduced as requested)
+        const MAX_PROBES = 5000; // upper cap to avoid infinite loops
+
+        let consecutiveMisses = 0;
+        let probes = 0;
+        const discoveredContests: CFContest[] = [];
+        const discoveredProblems = new Map<number, CFProblem[]>();
+
+        // Probe sequentially starting from next ID
+        for (let cid = highestId + 1; consecutiveMisses < MAX_CONSECUTIVE_MISSES && probes < MAX_PROBES; cid++) {
+            probes++;
+            try {
+                console.log(`Probing contest ID ${cid}...`);
+                const resp = await axios.get(
+                    `https://codeforces.com/api/contest.standings?contestId=${cid}&from=1&count=1`,
+                    { timeout: 20000 }
+                );
+
+                if (resp.data && resp.data.status === 'OK' && resp.data.result && resp.data.result.contest) {
+                    const c = resp.data.result.contest as any;
+                    const problemsRaw = Array.isArray(resp.data.result.problems) ? resp.data.result.problems : [];
+                    const problemsArr: CFProblem[] = problemsRaw.map((p: any) => ({
+                        contestId: cid,
+                        index: p.index,
+                        name: p.name,
+                        type: p.type || 'PROGRAMMING',
+                        rating: p.rating,
+                        tags: p.tags || [],
+                        points: p.points
+                    }));
+
+                    const contestObj: CFContest = {
+                        id: c.id,
+                        name: c.name,
+                        type: c.type || 'PROGRAMMING',
+                        phase: c.phase || 'FINISHED',
+                        frozen: !!c.frozen,
+                        durationSeconds: c.durationSeconds || 0,
+                        startTimeSeconds: c.startTimeSeconds,
+                        relativeTimeSeconds: c.relativeTimeSeconds,
+                        preparedBy: c.preparedBy,
+                        websiteUrl: c.websiteUrl,
+                        description: c.description,
+                        difficulty: c.difficulty,
+                        kind: c.kind,
+                        icpcRegion: c.icpcRegion,
+                        country: c.country,
+                        city: c.city,
+                        season: c.season
+                    };
+
+                    // Only consider finished contests and those with a start time
+                    if (contestObj.phase === 'FINISHED' && typeof contestObj.startTimeSeconds === 'number') {
+                        discoveredContests.push(contestObj);
+                        discoveredProblems.set(cid, problemsArr);
+                        consecutiveMisses = 0; // reset on found
+                        console.log(`  → Found contest ${cid} (${contestObj.name}) with ${problemsArr.length} problems`);
+                    } else {
+                        consecutiveMisses++;
+                    }
+                } else {
+                    consecutiveMisses++;
+                }
+            } catch (err: any) {
+                // Many IDs will not exist — count as a miss and continue
+                consecutiveMisses++;
+                console.warn(`  × no contest at ID ${cid} (${err?.message || 'no response'})`);
+            }
         }
 
-        const allContests: CFContest[] = contestsResponse.data.result;
-        console.log(`📊 Fetched ${allContests.length} total contests from Codeforces`);
+        console.log(`📊 Probing complete. Discovered ${discoveredContests.length} new candidate contests after probing ${probes} IDs`);
 
-        // Step 3: Filter to only FINISHED contests that started AFTER our latest contest
-        // Also check if contest ID already exists (to handle edge cases)
-        const existingIds = new Set(
-            (await Contest.find().select('id').lean()).map(c => c.id)
-        );
-
-        const newContests = allContests.filter(contest =>
-            contest.phase === 'FINISHED' &&
-            typeof contest.startTimeSeconds === 'number' &&
-            contest.startTimeSeconds > latestTime &&
-            !existingIds.has(contest.id)
-        );
-
-        console.log(`🆕 Found ${newContests.length} new FINISHED contests after ${new Date(latestTime * 1000).toISOString()} (out of ${allContests.length} total)`);
-
-        // Early exit if no new contests
-        if (newContests.length === 0) {
-            console.log('✅ Already up to date - no new contests');
+        // Early exit if nothing discovered
+        if (discoveredContests.length === 0) {
+            console.log('✅ Already up to date - no new contests found via ID probing');
             return res.json({
                 success: true,
                 contestsInserted: 0,
@@ -113,43 +166,9 @@ router.post('/sync', async (req, res) => {
             });
         }
 
-        // Step 4: Fetch problems for each new contest using contest.standings API
-        // This API provides immediate access to problems, unlike problemset.problems which has delays
-        console.log('📥 Fetching problems for each new contest from contest.standings API...');
-        const problemsByContest = new Map<number, CFProblem[]>();
-
-        await Promise.all(newContests.map(contest =>
-            limit(async () => {
-                try {
-                    console.log(`Fetching problems for contest ${contest.id}`);
-                    const resp = await axios.get(
-                        `https://codeforces.com/api/contest.standings?contestId=${contest.id}&from=1&count=1`,
-                        { timeout: 30000 }
-                    );
-
-                    if (resp.data.status === 'OK' && resp.data.result.problems) {
-                        const problems = resp.data.result.problems.map((p: any) => ({
-                            contestId: contest.id,
-                            index: p.index,
-                            name: p.name,
-                            type: p.type || 'PROGRAMMING',
-                            rating: p.rating,
-                            tags: p.tags || [],
-                            points: p.points
-                        }));
-                        problemsByContest.set(contest.id, problems);
-                    } else {
-                        problemsByContest.set(contest.id, []);
-                    }
-                } catch (e) {
-                    const msg = e instanceof Error ? e.message : String(e);
-                    console.warn(`Failed to fetch problems for contest ${contest.id}`, msg);
-                    problemsByContest.set(contest.id, []);
-                }
-            })
-        ));
-
-        console.log(`📊 Fetched problems for ${problemsByContest.size} contests`);
+        // Use discovered lists for insertion
+        const newContests = discoveredContests;
+        const problemsByContest = discoveredProblems;
 
         let contestsInserted = 0;
         let contestsUpdated = 0;
@@ -582,6 +601,14 @@ router.get('/sync/status', async (req, res) => {
         console.error('❌ Error checking sync status:', error.message);
         res.status(500).json({ error: 'Failed to check sync status' });
     }
+});
+
+// Informational GET for /sync: POST is required to trigger a sync.
+router.get('/sync', (req, res) => {
+    res.status(405).json({
+        success: false,
+        error: 'Method not allowed. Use POST /api/contests/sync to trigger an incremental sync. Use GET /api/contests/sync/status to check status.'
+    });
 });
 
 // Get problems across all contests with filters
