@@ -9,7 +9,11 @@ import contestRoutes from '../routes/contests.js';
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: ["https://cf-ladder-pro.vercel.app", "http://localhost:3000", "http://localhost:5173"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    credentials: true
+}));
 app.use(express.json());
 
 // MongoDB connection handling
