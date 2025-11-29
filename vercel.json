@@ -2,17 +2,20 @@
   "version": 2,
   "builds": [
     {
-      "src": "backend/api/index.ts",
+      "src": "api/index.ts",
       "use": "@vercel/node",
       "config": {
         "includeFiles": [
-          "backend/config/**",
-          "backend/controllers/**",
-          "backend/models/**",
-          "backend/routes/**"
+          "config/**",
+          "controllers/**",
+          "models/**",
+          "routes/**"
         ]
       }
     }
+  ],
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index.ts" }
   ],
   "headers": [
     {
