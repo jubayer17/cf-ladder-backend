@@ -1,6 +1,5 @@
-import 'dotenv/config'; // MUST BE FIRST for ts-node + ESM
+import 'dotenv/config';
 
-// Global handlers to capture thrown non-Error objects and unhandled rejections
 process.on('uncaughtException', (err) => {
     try {
         console.error('UNCAUGHT EXCEPTION:');
@@ -12,7 +11,6 @@ process.on('uncaughtException', (err) => {
             } catch { }
         }
     } finally {
-        // exit so nodemon or the caller can restart and we don't continue in a bad state
         process.exit(1);
     }
 });
@@ -40,7 +38,6 @@ import contestRoutes from './routes/contests.js';
 
 const app = express();
 
-// DB connect
 connectDB()
     .then(() => console.log("✅ MongoDB connected"))
     .catch((err) => console.error("❌ MongoDB error:", err));

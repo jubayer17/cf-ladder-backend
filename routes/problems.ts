@@ -21,7 +21,6 @@ interface Problem {
 
 const router = express.Router();
 
-// Config (from env, with sane defaults)
 const CACHE_TTL_MS = process.env.PROBLEMS_CACHE_TTL_MS
     ? parseInt(process.env.PROBLEMS_CACHE_TTL_MS, 10)
     : 1000 * 60 * 60; // 1 hour default
@@ -30,9 +29,8 @@ const CACHE_FILE_PATH =
     process.env.CACHE_FILE_PATH ||
     path.join(process.cwd(), "cache", "problems.cache.json");
 
-const REFRESH_SECRET = process.env.PROBLEMS_REFRESH_SECRET || ""; // set this to protect refresh
+const REFRESH_SECRET = process.env.PROBLEMS_REFRESH_SECRET || "";
 
-// In-memory cache
 let cachedProblems: Problem[] | null = null;
 let cacheTimestamp = 0;
 
@@ -42,7 +40,6 @@ async function ensureCacheDir(filepath: string) {
     try {
         await fs.mkdir(dir, { recursive: true });
     } catch (err) {
-        // ignore
     }
 }
 
@@ -56,8 +53,6 @@ async function loadCacheFromDisk() {
             console.log(`[problems] loaded cache from disk (${cachedProblems.length} items)`);
         }
     } catch (err) {
-        // file likely doesn't exist yet, that's fine
-        // console.warn("[problems] no cache file or failed to read:", err);
     }
 }
 
@@ -75,7 +70,6 @@ async function writeCacheToDisk(problems: Problem[]) {
     }
 }
 
-// Merge helper: build stats lookup and merge
 function mergeProblemsWithStats(problemsRaw: any[], statsRaw: any[]): Problem[] {
     const statsMap: Record<string, any> = {};
     for (const s of statsRaw || []) {
@@ -95,7 +89,7 @@ function mergeProblemsWithStats(problemsRaw: any[], statsRaw: any[]): Problem[] 
 
         return {
             ...p,
-            tags: Array.isArray(p.tags) ? p.tags : [], // ✅ ensure array
+            tags: Array.isArray(p.tags) ? p.tags : [],
             solvedCount,
             attemptCount,
             acceptance,
@@ -105,7 +99,6 @@ function mergeProblemsWithStats(problemsRaw: any[], statsRaw: any[]): Problem[] 
 
 }
 
-// Fetch fresh data from Codeforces and update cache (used by GET miss and POST /refresh)
 async function fetchAndCacheProblems(): Promise<Problem[]> {
     const cfResp = await axios.get("https://codeforces.com/api/problemset.problems", {
         timeout: 20_000,
@@ -118,7 +111,6 @@ async function fetchAndCacheProblems(): Promise<Problem[]> {
 
     const merged = mergeProblemsWithStats(problemsRaw, statsRaw);
 
-    // update in-memory and disk
     cachedProblems = merged;
     cacheTimestamp = Date.now();
     await writeCacheToDisk(merged);
@@ -126,12 +118,10 @@ async function fetchAndCacheProblems(): Promise<Problem[]> {
     return merged;
 }
 
-// Load cache from disk at startup (best-effort)
 loadCacheFromDisk().catch((e) => {
     console.warn("[problems] startup cache load failed:", e);
 });
 
-// GET / -> serve cached (if fresh) or fetch and return
 router.get("/", async (req: Request, res: Response) => {
     try {
         const wantAll = req.query.all === "true";
@@ -144,7 +134,6 @@ router.get("/", async (req: Request, res: Response) => {
             return res.json(cachedProblems.filter((p) => typeof p.rating === "number"));
         }
 
-        // cache miss or expired -> attempt fetch
         try {
             const fresh = await fetchAndCacheProblems();
             res.setHeader("X-Cache", "MISS");
@@ -153,7 +142,6 @@ router.get("/", async (req: Request, res: Response) => {
             return res.json(fresh.filter((p) => typeof p.rating === "number"));
         } catch (err) {
             console.error("[problems] fetch failed:", err);
-            // if fetch failed but disk cache exists (maybe expired), serve disk cache but mark stale
             if (cachedProblems) {
                 res.setHeader("X-Cache", "STALE");
                 res.setHeader("Cache-Control", "public, max-age=0");
@@ -169,7 +157,6 @@ router.get("/", async (req: Request, res: Response) => {
     }
 });
 
-// POST /refresh -> force refresh cache (protected by secret)
 router.post("/refresh", async (req: Request, res: Response) => {
     try {
         const provided =
@@ -178,7 +165,6 @@ router.post("/refresh", async (req: Request, res: Response) => {
             return res.status(401).json({ message: "Unauthorized" });
         }
 
-        // fetch and replace cache
         const fresh = await fetchAndCacheProblems();
         return res.json({ ok: true, count: fresh.length });
     } catch (err) {
